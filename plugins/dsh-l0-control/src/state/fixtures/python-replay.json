@@ -1,0 +1,95 @@
+{
+ "schema": 1,
+ "generator": "python control_plane (sqlite :memory:)，oracle 版本 mtime 2026-10-29T21:20（graph.set_status 唯一入口 + assignee_changed + replay 后像）",
+ "note": "statuses/assignee/attempts/edges 取自 graph.snapshot()；replay* 取自 graph.replay_snapshot()。上游已修好 assignee 事件化，故 snapshotEqualsReplay 应为 true",
+ "script": [
+  {
+   "op": "add_node",
+   "node_id": "N1",
+   "title": "解析愿望",
+   "capability": "research",
+   "stage": "research"
+  },
+  {
+   "op": "add_node",
+   "node_id": "N2",
+   "title": "产出 PRD",
+   "capability": "design_spec",
+   "stage": "design",
+   "deps": [
+    "N1"
+   ]
+  },
+  {
+   "op": "bootstrap"
+  },
+  {
+   "op": "claim",
+   "node_id": "N1",
+   "owner": "agent-A",
+   "fencing_token": 1
+  }
+ ],
+ "python": {
+  "eventCount": 8,
+  "eventKinds": [
+   "node_added",
+   "edge_added",
+   "node_added",
+   "status_changed",
+   "ready_recomputed",
+   "lease_claimed",
+   "status_changed",
+   "assignee_changed"
+  ],
+  "eventIds": [
+   "EVT-000001",
+   "EVT-000002",
+   "EVT-000003",
+   "EVT-000004",
+   "EVT-000005",
+   "EVT-000006",
+   "EVT-000007",
+   "EVT-000008"
+  ],
+  "statuses": {
+   "N1": "claimed",
+   "N2": "planned"
+  },
+  "replayStatuses": {
+   "N1": "claimed",
+   "N2": "planned"
+  },
+  "assignee": {
+   "N1": "agent-A",
+   "N2": null
+  },
+  "replayAssignee": {
+   "N1": "agent-A",
+   "N2": null
+  },
+  "attempts": {
+   "N1": 0,
+   "N2": 0
+  },
+  "replayAttempts": {
+   "N1": 0,
+   "N2": 0
+  },
+  "edges": [
+   [
+    "N1",
+    "N2",
+    "blocks"
+   ]
+  ],
+  "replayEdges": [
+   [
+    "N1",
+    "N2",
+    "blocks"
+   ]
+  ],
+  "snapshotEqualsReplay": true
+ }
+}

@@ -1,0 +1,32 @@
+# DSH runtime state / local sessions
+.l0-control*/
+.l0-control
+.l0-adapter/
+projects/
+out/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Node / build caches
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+
+# Python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated test artifacts (keep source scripts/scenarios)
+plugins/dsh-l0-control/tests/e2e/artifacts/
+plugins/dsh-l0-control/tests/e2e/native-real/run-*.json
+plugins/dsh-l0-control/tests/e2e/autonomy/artifacts/
+
+.probe-state.json
+
+# local adapter/probe fixtures (not part of the published plugins)
+plugins/dsh-l0-adapter/
+plugins/dsh-probe/
+plugins/dsh-probe2/

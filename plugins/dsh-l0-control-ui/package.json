@@ -1,0 +1,24 @@
+{
+  "name": "@local/dsh-l0-control-ui",
+  "version": "0.1.0",
+  "private": true,
+  "author": "weidujianchazhe (如天之星)",
+  "license": "MIT",
+  "type": "module",
+  "description": "AI集群工作协议 DSH UI：许愿式集群工作面板；展示多子 Agent 递归分支、团队/任务/黑板/目录，并提示高 token 消耗。",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-workspace"]
+    }
+  }
+}

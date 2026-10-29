@@ -1,0 +1,156 @@
+{
+  "schema": 1,
+  "version": 19,
+  "createdAt": "2026-10-29T12:50:31.940Z",
+  "updatedAt": "2026-10-29T12:57:49.726Z",
+  "instances": {
+    "ROLE-CODE-01": {
+      "instanceId": "ROLE-CODE-01",
+      "role": "CODE",
+      "index": 1,
+      "mode": "session",
+      "provider": "sessionController",
+      "label": "ROLE-CODE-01 probe",
+      "sessionId": "session-00000000-0000-4000-8000-000000000001",
+      "parentSessionId": null,
+      "status": "closed",
+      "budgetTokens": 0,
+      "requestIds": [
+        "6207d4a2-787e-47f4-a821-05c7a42ec8d0"
+      ],
+      "createdAt": "2026-10-29T12:50:36.014Z",
+      "updatedAt": "2026-10-29T12:52:15.701Z",
+      "lastCheckpointId": "CKPT-a2464162",
+      "closedAt": "2026-10-29T12:52:15.701Z"
+    },
+    "ROLE-CODE-02": {
+      "instanceId": "ROLE-CODE-02",
+      "role": "CODE",
+      "index": 2,
+      "mode": "session",
+      "provider": "sessionController",
+      "label": "ROLE-CODE-02 probe",
+      "sessionId": "session-00000000-0000-4000-8000-000000000002",
+      "parentSessionId": null,
+      "status": "closed",
+      "budgetTokens": 0,
+      "requestIds": [
+        "fb162d02-9fef-4fcb-85e1-1434c8b0facb"
+      ],
+      "createdAt": "2026-10-29T12:50:38.163Z",
+      "updatedAt": "2026-10-29T12:57:49.725Z",
+      "fencing": {
+        "instanceId": "ROLE-CODE-02",
+        "token": 1793278664984,
+        "owner": "lane-d-repair",
+        "issuedAt": "2026-10-29T12:57:44.983Z",
+        "expiresAt": "2026-10-29T12:58:44.983Z",
+        "previousToken": 1793278273588
+      },
+      "note": "lane-d fencing ok",
+      "closedAt": "2026-10-29T12:52:15.707Z"
+    },
+    "ROLE-AUDIT-01": {
+      "instanceId": "ROLE-AUDIT-01",
+      "role": "AUDIT",
+      "index": 1,
+      "mode": "activation",
+      "provider": "spawn",
+      "label": "ROLE-AUDIT-01 probe",
+      "sessionId": "775de20d-bf1d-498c-8a23-04c298c1a9b0",
+      "parentSessionId": "1210cf86-12cb-4117-99d3-d42784b7e0ce",
+      "status": "closed",
+      "budgetTokens": 0,
+      "createdAt": "2026-10-29T12:51:17.199Z",
+      "updatedAt": "2026-10-29T12:52:06.653Z",
+      "closedAt": "2026-10-29T12:52:06.653Z"
+    }
+  },
+  "usage": {
+    "ROLE-CODE-01": {
+      "calls": 2,
+      "inputTokens": 15078,
+      "outputTokens": 6,
+      "totalTokens": 0,
+      "cacheReadTokens": 8448,
+      "cacheWriteTokens": 0,
+      "reasoningTokens": 0,
+      "finishReasons": {
+        "stop": 2
+      },
+      "firstAt": "2026-10-29T12:50:36.992Z",
+      "lastAt": "2026-10-29T12:50:37.744Z"
+    },
+    "ROLE-CODE-02": {
+      "calls": 2,
+      "inputTokens": 1256,
+      "outputTokens": 9,
+      "totalTokens": 0,
+      "cacheReadTokens": 22272,
+      "cacheWriteTokens": 0,
+      "reasoningTokens": 0,
+      "finishReasons": {
+        "stop": 2
+      },
+      "firstAt": "2026-10-29T12:50:39.875Z",
+      "lastAt": "2026-10-29T12:50:40.111Z"
+    },
+    "ROLE-AUDIT-01": {
+      "calls": 2,
+      "inputTokens": 16279,
+      "outputTokens": 6,
+      "totalTokens": 0,
+      "cacheReadTokens": 28288,
+      "cacheWriteTokens": 0,
+      "reasoningTokens": 0,
+      "finishReasons": {
+        "stop": 2
+      },
+      "firstAt": "2026-10-29T12:51:18.658Z",
+      "lastAt": "2026-10-29T12:51:21.052Z"
+    }
+  },
+  "checkpoints": {
+    "ROLE-CODE-01": [
+      {
+        "checkpointId": "CKPT-a2464162",
+        "instanceId": "ROLE-CODE-01",
+        "sessionId": "session-00000000-0000-4000-8000-000000000001",
+        "lastSeq": 24,
+        "graphRevision": 1,
+        "mode": "session",
+        "at": "2026-10-29T12:51:13.580Z",
+        "inspectError": null,
+        "flush": "not-attempted: sessions.flush 需要活 session 对象"
+      }
+    ]
+  },
+  "fencing": {
+    "ROLE-CODE-02": {
+      "instanceId": "ROLE-CODE-02",
+      "token": 1793278664984,
+      "owner": "lane-d-repair",
+      "issuedAt": "2026-10-29T12:57:44.983Z",
+      "expiresAt": "2026-10-29T12:58:44.983Z",
+      "previousToken": 1793278273588
+    }
+  },
+  "verifications": {
+    "VER-0001": {
+      "verificationId": "VER-0001",
+      "verdict": "unknown",
+      "artifactPath": "README.md",
+      "acceptance": {
+        "expected": "",
+        "kind": "contains"
+      },
+      "detail": "contains 需要非空字符串 expected",
+      "at": "2026-10-29T12:57:42.079Z"
+    }
+  },
+  "counter": {
+    "tokens": 0,
+    "instances": 3,
+    "verifications": 1
+  }
+}

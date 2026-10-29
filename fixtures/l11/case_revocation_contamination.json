@@ -1,0 +1,15 @@
+{
+  "request_id": "REQ-005",
+  "graph_id": "GRAPH-20261029-D4E5F6",
+  "from_instance": "inst-A",
+  "to_instance": "inst-B",
+  "mode": "read",
+  "graph_version": "gv2",
+  "revoke": true,
+  "revoked_units": ["UNIT-BASE"],
+  "units": [
+    { "unit_id": "UNIT-A", "kind": "decision", "status": "confirmed", "scope": "shareable", "graph_version": "gv2", "deps": ["UNIT-BASE"] },
+    { "unit_id": "UNIT-B", "kind": "decision", "status": "confirmed", "scope": "shareable", "graph_version": "gv2", "deps": ["UNIT-A"] },
+    { "unit_id": "UNIT-C", "kind": "evidence", "status": "confirmed", "scope": "shareable", "graph_version": "gv2", "deps": [] }
+  ]
+}

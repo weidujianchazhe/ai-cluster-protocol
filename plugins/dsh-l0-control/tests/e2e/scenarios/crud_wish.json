@@ -1,0 +1,142 @@
+{
+  "scenario": "crud_wish",
+  "description": "N5 e2e 主场景：一次许愿 → 五段任务图 → 两个 CODE 实例并行 → 独立审计 → 交付。覆盖验收 A1（无人工中继）/ A2（同职务实例不串）/ A3（审计独立）。",
+  "acceptance": ["A1_no_human_relay", "A2_role_instances_isolated", "A3_audit_independent"],
+  "wish": {
+    "text": "做一个能记账的个人支出 CRUD 小工具（单页）",
+    "acceptance": [
+      "能新增/编辑/删除/列出支出记录",
+      "单条记录字段：金额、类别、日期、备注",
+      "列表支持按类别过滤",
+      "有测试与独立审计报告"
+    ],
+    "constraints": {
+      "max_parallel": 5,
+      "max_depth": 3,
+      "style": "minimal"
+    }
+  },
+  "instance_plan": {
+    "RESEARCH": 1,
+    "DESIGN": 1,
+    "CODE": 2,
+    "INTEGRATION": 1,
+    "TEST": 1,
+    "AUDIT_CODE": 1,
+    "AUDIT_EVIDENCE": 1,
+    "DOC": 1
+  },
+  "expected_stage_gates": ["research", "design", "build", "audit", "deliver"],
+  "expected_nodes": [
+    {
+      "node_id": "NODE-RESEARCH",
+      "stage": "research",
+      "capability": "RESEARCH",
+      "deps": [],
+      "evidence_required": ["note"],
+      "expect_assignee_role": "RESEARCH"
+    },
+    {
+      "node_id": "NODE-PRD",
+      "stage": "design",
+      "capability": "DESIGN",
+      "deps": ["NODE-RESEARCH"],
+      "evidence_required": ["prd"],
+      "expect_assignee_role": "DESIGN"
+    },
+    {
+      "node_id": "NODE-CONTRACT",
+      "stage": "design",
+      "capability": "DESIGN",
+      "deps": ["NODE-PRD"],
+      "evidence_required": ["contract"],
+      "expect_assignee_role": "DESIGN"
+    },
+    {
+      "node_id": "NODE-DB",
+      "stage": "build",
+      "capability": "CODE",
+      "deps": ["NODE-CONTRACT"],
+      "evidence_required": ["migration"],
+      "expect_assignee_role": "CODE"
+    },
+    {
+      "node_id": "NODE-BACKEND",
+      "stage": "build",
+      "capability": "CODE",
+      "deps": ["NODE-DB"],
+      "evidence_required": ["api_test"],
+      "expect_assignee_role": "CODE"
+    },
+    {
+      "node_id": "NODE-FRONTEND",
+      "stage": "build",
+      "capability": "CODE",
+      "deps": ["NODE-CONTRACT"],
+      "evidence_required": ["ui_smoke"],
+      "expect_assignee_role": "CODE"
+    },
+    {
+      "node_id": "NODE-INTEGRATION",
+      "stage": "build",
+      "capability": "INTEGRATION",
+      "deps": ["NODE-BACKEND", "NODE-FRONTEND"],
+      "evidence_required": ["e2e_run"],
+      "expect_assignee_role": "INTEGRATION"
+    },
+    {
+      "node_id": "NODE-TEST",
+      "stage": "audit",
+      "capability": "TEST",
+      "deps": ["NODE-INTEGRATION"],
+      "evidence_required": ["coverage"],
+      "expect_assignee_role": "TEST"
+    },
+    {
+      "node_id": "NODE-AUDIT",
+      "stage": "audit",
+      "capability": "AUDIT_CODE",
+      "deps": ["NODE-TEST"],
+      "evidence_required": ["audit_report"],
+      "expect_assignee_role": "AUDIT_CODE"
+    },
+    {
+      "node_id": "NODE-DELIVER",
+      "stage": "deliver",
+      "capability": "DOC",
+      "deps": ["NODE-AUDIT"],
+      "evidence_required": ["deliverable"],
+      "expect_assignee_role": "DOC"
+    }
+  ],
+  "dispatch": {
+    "note": "期望的认领分配：两个 CODE 实例各领不同节点（A2 断言依据）；审计由 AUDIT_CODE / AUDIT_EVIDENCE 实例承担，且不得与生产者同实例（A3）。",
+    "assignments": [
+      { "node_id": "NODE-RESEARCH", "instance": "ROLE-RESEARCH-01" },
+      { "node_id": "NODE-PRD", "instance": "ROLE-DESIGN-01" },
+      { "node_id": "NODE-CONTRACT", "instance": "ROLE-DESIGN-01" },
+      { "node_id": "NODE-DB", "instance": "ROLE-CODE-01" },
+      { "node_id": "NODE-BACKEND", "instance": "ROLE-CODE-01" },
+      { "node_id": "NODE-FRONTEND", "instance": "ROLE-CODE-02" },
+      { "node_id": "NODE-INTEGRATION", "instance": "ROLE-INTEGRATION-01" },
+      { "node_id": "NODE-TEST", "instance": "ROLE-TEST-01" },
+      { "node_id": "NODE-AUDIT", "instance": "ROLE-AUDIT_CODE-01" },
+      { "node_id": "NODE-DELIVER", "instance": "ROLE-DOC-01" }
+    ],
+    "auditors": [
+      { "node_id": "NODE-AUDIT", "instance": "ROLE-AUDIT_EVIDENCE-01" }
+    ]
+  },
+  "expected_messages": [
+    { "from": "plugin", "to": "ROLE-CODE-01", "kind": "task_dispatch", "node_id": "NODE-DB" },
+    { "from": "plugin", "to": "ROLE-CODE-02", "kind": "task_dispatch", "node_id": "NODE-FRONTEND" },
+    { "from": "ROLE-CODE-01", "to": "plugin", "kind": "evidence_ready", "node_id": "NODE-DB" }
+  ],
+  "forbidden": [
+    { "id": "F1", "rule": "no_human_actor_between_wish_and_delivery", "why": "A1" },
+    { "id": "F2", "rule": "same_instance_claims_two_live_nodes", "why": "A2（同一实例不得同时持有两个活跃节点）" },
+    { "id": "F3", "rule": "producer_equals_auditor_same_node", "why": "A3" },
+    { "id": "F4", "rule": "done_without_evidence", "why": "不变量：done 只能由证据事务触发" },
+    { "id": "F5", "rule": "command_drives_status_transition", "why": "A1（命令不得推进节点状态）" }
+  ]
+}

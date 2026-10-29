@@ -1,0 +1,66 @@
+{
+  "scenario": "failure_replan",
+  "description": "N5 e2e 失败场景：独立审计首轮 fail → 节点回 ready（attempts+1）→ replan 递增 graph_version → 只重做受影响子图 → 最终 done。覆盖验收 A4（失败可 replan），并复用 A2/A3 的隔离与独立断言。",
+  "acceptance": ["A4_failure_replan", "A2_role_instances_isolated", "A3_audit_independent"],
+  "base_scenario": "crud_wish.json",
+  "fault_injection": [
+    {
+      "at": "NODE-TEST",
+      "kind": "evidence_fail",
+      "detail": "首轮 coverage evidence verdict=fail，触发 rejected → ready",
+      "expect_after": {
+        "node_status": "ready",
+        "attempts_delta": 1
+      }
+    }
+  ],
+  "replan": {
+    "trigger": "NODE-TEST 首次 fail 后由 planner 发起",
+    "reason": "audit_failed",
+    "expect": {
+      "graph_version_delta": 1,
+      "replanned_nodes": ["NODE-TEST", "NODE-AUDIT", "NODE-DELIVER"],
+      "untouched_nodes": [
+        "NODE-RESEARCH",
+        "NODE-PRD",
+        "NODE-CONTRACT",
+        "NODE-DB",
+        "NODE-BACKEND",
+        "NODE-FRONTEND",
+        "NODE-INTEGRATION"
+      ]
+    }
+  },
+  "assertions": [
+    {
+      "id": "R1",
+      "rule": "rejected_node_returns_ready_with_attempts_plus_one",
+      "why": "A4：证据不合格 → rejected → ready，且 attempts+1（不得静默丢弃）"
+    },
+    {
+      "id": "R2",
+      "rule": "replan_increments_graph_version_monotonically",
+      "why": "A4：replan 必须写 replan_events 且 graph_version 单调 +1"
+    },
+    {
+      "id": "R3",
+      "rule": "only_affected_subtree_reruns",
+      "why": "A4：未受影响节点的 updated_at 不得变化（不许全量重做）"
+    },
+    {
+      "id": "R4",
+      "rule": "audit_reexecuted_by_distinct_instance",
+      "why": "A3：重跑后的审计实例仍不得等于生产者实例"
+    },
+    {
+      "id": "R5",
+      "rule": "final_state_done_after_successful_reexecution",
+      "why": "闭环必须收敛，不能停在 ready"
+    }
+  ],
+  "forbidden": [
+    { "id": "F6", "rule": "replan_without_event", "why": "版本递增必须有事件可回放" },
+    { "id": "F7", "rule": "retry_forever", "why": "attempts 受 max_attempts 约束，超限须 blocked 并升级" },
+    { "id": "F8", "rule": "silent_drop_on_failure", "why": "失败必须落账（事件 + 问题态），不得静默丢弃" }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "AI集群工作协议",
+    "description": "许愿式 DSH 集群工作插件：派发多个子 Agent 并行工作，子 Agent 可继续递归派发；工作量大、吞吐高，token 消耗也显著更高。"
+  }
+}

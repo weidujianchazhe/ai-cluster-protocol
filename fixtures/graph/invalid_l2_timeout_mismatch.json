@@ -1,0 +1,34 @@
+{
+  "graph_id": "GRAPH-20261029-B00002",
+  "goal": "L2 超时但 chosen 不等于默认（反例）",
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "x", "verifier_id": "v" }
+  ],
+  "budget": { "max_tokens": 100, "max_calls": 2, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "t", "spec": "s", "status": "planned", "deps": [], "decision_id": "DEC-001" }
+  ],
+  "edges": [],
+  "artifacts": [],
+  "events": [],
+  "ledger": { "entries": [] },
+  "decisions": [
+    {
+      "decision_id": "DEC-001",
+      "node_id": "NODE-001",
+      "level": "L2",
+      "question": "选哪个？",
+      "options": [
+        { "option_id": "opt-a", "label": "A" },
+        { "option_id": "opt-b", "label": "B" }
+      ],
+      "default_option_id": "opt-a",
+      "chosen_option_id": "opt-b",
+      "reversible": true,
+      "impact": "medium",
+      "status": "timed_out",
+      "timeout_sec": 60
+    }
+  ]
+}

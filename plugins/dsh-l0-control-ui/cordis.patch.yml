@@ -1,0 +1,3 @@
+- insert:
+    - id: l0-control-ui
+      name: '@local/dsh-l0-control-ui'

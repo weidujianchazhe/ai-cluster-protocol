@@ -1,0 +1,158 @@
+{
+  "generatedAt": "2026-10-29T13:43:03.948Z",
+  "samples": {
+    "wish_submit": {
+      "ok": false,
+      "error": "core-unavailable",
+      "action": "wish_submit",
+      "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+      "stateAuthority": "plugin-journal"
+    },
+    "graph_status": {
+      "ok": true,
+      "journal": {
+        "path": "C:\\Temp\\l0control-contract\\.l0-contract\\journal.jsonl",
+        "events": 2,
+        "lastKind": "wish_submitted"
+      },
+      "stateDir": "C:\\Temp\\l0control-contract\\.l0-contract",
+      "snapshotExists": false,
+      "capabilities": {
+        "plugin": "dsh-l0-control",
+        "contractVersion": "0.1.0",
+        "toolCount": 9,
+        "grades": {
+          "self-built": 7,
+          "native": 1,
+          "projection": 1
+        },
+        "supports_whitebox": false,
+        "stateAuthority": "plugin-journal",
+        "teamTaskRole": "projection",
+        "callerRequired": "live-agent"
+      },
+      "graph": {
+        "ok": false,
+        "error": "core-unavailable",
+        "action": "graph_status",
+        "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+        "stateAuthority": "plugin-journal"
+      }
+    },
+    "task_next": {
+      "ok": false,
+      "error": "core-unavailable",
+      "action": "task_next",
+      "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+      "stateAuthority": "plugin-journal"
+    },
+    "task_claim": {
+      "ok": false,
+      "error": "core-unavailable",
+      "action": "task_claim",
+      "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+      "stateAuthority": "plugin-journal"
+    },
+    "evidence_submit": {
+      "ok": false,
+      "error": "core-unavailable",
+      "action": "evidence_submit",
+      "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+      "stateAuthority": "plugin-journal"
+    },
+    "verify_done": {
+      "ok": false,
+      "error": "core-unavailable",
+      "action": "verify_done",
+      "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+      "stateAuthority": "plugin-journal"
+    },
+    "decide": {
+      "ok": false,
+      "error": "core-unavailable",
+      "action": "decide",
+      "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+      "stateAuthority": "plugin-journal"
+    },
+    "team_status": {
+      "ok": true,
+      "native": true,
+      "caller": "session-contract-caller",
+      "membership": {
+        "rootId": "session-root",
+        "id": "team-1",
+        "role": "teammate",
+        "name": "contract-peer"
+      },
+      "memberCount": 2,
+      "members": [
+        {
+          "id": "session-1",
+          "name": "lead",
+          "role": "lead",
+          "status": "running",
+          "model": "m",
+          "provider": null
+        },
+        {
+          "id": "session-2",
+          "name": "peer",
+          "role": "teammate",
+          "status": "inactive",
+          "model": "m",
+          "provider": "spawn"
+        }
+      ],
+      "taskCount": 1,
+      "tasks": [
+        {
+          "id": "task-1",
+          "revision": 3,
+          "subject": "s",
+          "status": "completed",
+          "ownerName": "peer",
+          "ready": false,
+          "blockedByCount": 1
+        }
+      ]
+    },
+    "export": {
+      "ok": true,
+      "outDir": "C:\\Temp\\l0control-contract\\.l0-contract\\export",
+      "files": [
+        "C:\\Temp\\l0control-contract\\.l0-contract\\export\\capabilities.json",
+        "C:\\Temp\\l0control-contract\\.l0-contract\\export\\STATE.md"
+      ],
+      "core": {
+        "ok": false,
+        "error": "core-unavailable",
+        "action": "export",
+        "hint": "src/core 归 N3；core 缺失时插件不得假装成功",
+        "stateAuthority": "plugin-journal"
+      }
+    },
+    "evidence_submit#producer-unknown": {
+      "ok": false,
+      "error": "producer-unknown",
+      "hint": "传 producer_instance，或让 caller 绑定一个 ROLE-<职务>-<序号> 实例"
+    },
+    "verify_done#auditor-required": {
+      "ok": false,
+      "error": "auditor-required",
+      "hint": "传 auditor_instance（ROLE-AUDIT_* 实例），或让 caller 绑定审计实例"
+    },
+    "verify_done#audit-independence-violated": {
+      "ok": false,
+      "error": "audit-independence-violated",
+      "hint": "同一产物的生产实例与审计实例不得相同（复合实例含审计职务时亦然）",
+      "producer_instance": "ROLE-AUDIT_CODE-01",
+      "auditor_instance": "ROLE-AUDIT_CODE-01"
+    },
+    "verify_done#auditor-role-required": {
+      "ok": false,
+      "error": "auditor-role-required",
+      "hint": "auditor_instance 的职务必须属审计职务（AUDIT_CODE/AUDIT_EVIDENCE/AUDIT_DESIGN）",
+      "auditorRole": "CODE"
+    }
+  }
+}

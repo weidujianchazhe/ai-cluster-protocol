@@ -1,0 +1,131 @@
+{
+  "graph_id": "GRAPH-20261029-D4E5F6",
+  "goal": "完整工作图 v2：阶段/证据/决策/重算/A2A 预留",
+  "constraints": ["训练无关", "同源部署"],
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "产物 sha256 可复核", "verifier_id": "sha256-check" },
+    { "acceptance_id": "ACC-002", "criterion": "依赖顺序满足", "verifier_id": "dag-check" }
+  ],
+  "budget": { "max_tokens": 20000, "max_calls": 40, "max_wall_min": 30, "max_parallel": 2, "max_cost": 1.5 },
+  "version": 2,
+  "nodes": [
+    {
+      "node_id": "NODE-001",
+      "title": "整理问题态",
+      "spec": "把假设/证据写成 state unit",
+      "status": "done",
+      "deps": [],
+      "attempts": 1,
+      "assignee": "inst-A",
+      "verifier_ids": ["sha256-check"],
+      "risk": "low",
+      "capability": "research",
+      "stage": "build",
+      "evidence_required": ["build"],
+      "evidence": [
+        { "evidence_id": "EVD-001", "kind": "build", "artifact_id": "ART-001", "verifier_id": "sha256-check", "verdict": "pass", "at": "2026-10-29T00:01:00+08:00" }
+      ]
+    },
+    {
+      "node_id": "NODE-002",
+      "title": "据此产出结论",
+      "spec": "基于 NODE-001 的单元写结论",
+      "status": "planned",
+      "deps": ["NODE-001"],
+      "attempts": 0,
+      "assignee": null,
+      "verifier_ids": [],
+      "risk": "medium",
+      "capability": "design_spec",
+      "stage": "build",
+      "decision_id": "DEC-001"
+    }
+  ],
+  "edges": [
+    { "from": "NODE-001", "to": "NODE-002", "kind": "blocks" },
+    { "from": "NODE-001", "to": "ART-001", "kind": "artifact" }
+  ],
+  "state_units": [
+    {
+      "unit_id": "UNIT-001",
+      "kind": "evidence",
+      "statement": "前缀缓存在同 graph 多实例间可命中",
+      "status": "confirmed",
+      "deps": [],
+      "evidence": ["ART-001"],
+      "scope": "shareable",
+      "graph_version": "gv2",
+      "revision": 1
+    },
+    {
+      "unit_id": "UNIT-002",
+      "kind": "assumption",
+      "statement": "某条私有推理链的中间猜测",
+      "status": "proposed",
+      "deps": [],
+      "evidence": [],
+      "scope": "private",
+      "competing": true,
+      "graph_version": "gv2",
+      "revision": 0
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact_id": "ART-001",
+      "path": "out/notes.md",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "producer_node": "NODE-001",
+      "verifier_ids": ["sha256-check"],
+      "a2a_artifact_id": "a2a-art-001"
+    }
+  ],
+  "events": [
+    { "event_id": "EVT-001", "ts": "2026-10-29T00:01:00+08:00", "graph_id": "GRAPH-20261029-D4E5F6", "node_id": "NODE-001", "instance_id": "inst-A", "kind": "node_submitted", "refs": ["ART-001"] },
+    { "event_id": "EVT-002", "ts": "2026-10-29T00:02:00+08:00", "graph_id": "GRAPH-20261029-D4E5F6", "node_id": "NODE-001", "kind": "node_done", "influence_marks": ["span=1;source=none"] }
+  ],
+  "ledger": {
+    "entries": [
+      { "node_id": "NODE-001", "instance_id": "inst-A", "tokens_in": 1200, "tokens_out": 300, "cache_saved": 800, "calls": 3, "wall_ms": 42000, "verifier_cost": 0.0 }
+    ]
+  },
+  "decisions": [
+    {
+      "decision_id": "DEC-001",
+      "node_id": "NODE-002",
+      "level": "L2",
+      "question": "结论用 A 方案还是 B 方案？",
+      "options": [
+        { "option_id": "opt-a", "label": "默认：按 A 方案" },
+        { "option_id": "opt-b", "label": "按 B 方案" }
+      ],
+      "default_option_id": "opt-a",
+      "chosen_option_id": "opt-a",
+      "reversible": true,
+      "impact": "medium",
+      "status": "timed_out",
+      "timeout_sec": 600,
+      "decided_at": "2026-10-29T00:12:00+08:00",
+      "note": "用户未回应，超时按默认推进"
+    }
+  ],
+  "replan_events": [
+    {
+      "event_id": "EVT-010",
+      "at": "2026-10-29T00:10:00+08:00",
+      "reason": "evidence_insufficient",
+      "graph_version": 1,
+      "added_nodes": ["NODE-002"],
+      "removed_nodes": [],
+      "note": "证据不足，补一个结论节点"
+    }
+  ],
+  "stage_gates": [
+    { "stage": "build", "status": "passed", "evidence_refs": ["EVD-001"], "decided_at": "2026-10-29T00:05:00+08:00" }
+  ],
+  "a2a": {
+    "protocol_version": "1.0",
+    "task_id": "a2a-task-0001",
+    "agent_card": { "name": "root", "capabilities": ["code_fullstack", "audit_test"] }
+  }
+}

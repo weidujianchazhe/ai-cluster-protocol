@@ -1,0 +1,16 @@
+{
+  "graph_id": "GRAPH-20261029-000007",
+  "goal": "accepted 却没有验证器（违反检验不可绕过）",
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "x", "verifier_id": "v" }
+  ],
+  "budget": { "max_tokens": 10, "max_calls": 1, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "t", "spec": "s", "status": "accepted", "deps": [], "verifier_ids": [] }
+  ],
+  "edges": [],
+  "artifacts": [],
+  "events": [],
+  "ledger": { "entries": [] }
+}

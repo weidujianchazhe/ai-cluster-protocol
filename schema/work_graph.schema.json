@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "l0/work_graph.schema.json",
+  "title": "L0 work graph (training-free invocation layer) · v2",
+  "description": "工作图最小 schema v2：节点是工作单元，不是执行实例。新增 capability / stage / evidence_required / evidence / decision / replan_events / stage_gates / A2A 预留字段。设计依据：designs/_research/L0调用层-设计细化.md §1-§11；designs/_research/许愿式产品流水线-控制面对齐.md §2-§3。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["graph_id", "goal", "acceptance", "budget", "version", "nodes", "edges", "artifacts", "events", "ledger"],
+  "properties": {
+    "graph_id": { "type": "string", "pattern": "^GRAPH-[0-9]{8}-[0-9A-F]{6}$" },
+    "goal": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "constraints": { "type": "array", "items": { "type": "string" }, "maxItems": 50 },
+    "acceptance": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/acceptance" } },
+    "budget": { "$ref": "#/$defs/budget" },
+    "version": { "type": "integer", "minimum": 1 },
+    "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
+    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+    "state_units": { "type": "array", "items": { "$ref": "#/$defs/state_unit" } },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+    "ledger": { "$ref": "#/$defs/ledger" },
+    "decisions": { "type": "array", "items": { "$ref": "#/$defs/decision" } },
+    "replan_events": { "type": "array", "items": { "$ref": "#/$defs/replan_event" } },
+    "stage_gates": { "type": "array", "items": { "$ref": "#/$defs/stage_gate" } },
+    "a2a": { "$ref": "#/$defs/a2a" }
+  },
+  "$defs": {
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptance_id", "criterion", "verifier_id"],
+      "properties": {
+        "acceptance_id": { "type": "string", "pattern": "^ACC-[A-Z0-9-]+$" },
+        "criterion": { "type": "string", "minLength": 1 },
+        "verifier_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_tokens", "max_calls", "max_wall_min", "max_parallel"],
+      "properties": {
+        "max_tokens": { "type": "integer", "minimum": 1 },
+        "max_calls": { "type": "integer", "minimum": 1 },
+        "max_wall_min": { "type": "number", "minimum": 0.1 },
+        "max_parallel": { "type": "integer", "minimum": 1 },
+        "max_cost": { "type": "number", "minimum": 0 }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "title", "spec", "status", "deps"],
+      "properties": {
+        "node_id": { "type": "string", "pattern": "^NODE-[A-Z0-9-]+$" },
+        "title": { "type": "string", "minLength": 1 },
+        "spec": { "type": "string", "minLength": 1 },
+        "inputs": { "type": "array", "items": { "type": "string" } },
+        "outputs": { "type": "array", "items": { "type": "string" } },
+        "deps": { "type": "array", "items": { "type": "string" } },
+        "status": {
+          "enum": ["planned", "ready", "claimed", "running", "submitted", "verifying", "accepted", "rejected", "blocked", "done"]
+        },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "assignee": { "type": ["string", "null"] },
+        "verifier_ids": { "type": "array", "items": { "type": "string" } },
+        "risk": { "enum": ["low", "medium", "high"] },
+        "capability": { "type": "string", "minLength": 1 },
+        "stage": { "enum": ["research", "design", "build", "audit", "deliver"] },
+        "evidence_required": { "type": "array", "items": { "type": "string" } },
+        "evidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "decision_id": { "type": "string" },
+        "a2a_task_id": { "type": "string" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "kind"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["blocks", "artifact", "review"] }
+      }
+    },
+    "state_unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit_id", "kind", "statement", "status"],
+      "properties": {
+        "unit_id": { "type": "string", "pattern": "^UNIT-[A-Z0-9-]+$" },
+        "kind": { "enum": ["assumption", "evidence", "counterexample", "open_question", "decision", "premise"] },
+        "statement": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["proposed", "confirmed", "refuted", "pending", "superseded", "invalidated"] },
+        "deps": { "type": "array", "items": { "type": "string" } },
+        "evidence": { "type": "array", "items": { "type": "string" } },
+        "scope": { "enum": ["shareable", "private"] },
+        "competing": { "type": "boolean" },
+        "graph_version": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "path", "sha256", "producer_node"],
+      "properties": {
+        "artifact_id": { "type": "string", "pattern": "^ART-[A-Z0-9-]+$" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "producer_node": { "type": "string", "minLength": 1 },
+        "verifier_ids": { "type": "array", "items": { "type": "string" } },
+        "a2a_artifact_id": { "type": "string" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "ts", "kind"],
+      "properties": {
+        "event_id": { "type": "string", "pattern": "^EVT-[A-Z0-9-]+$" },
+        "ts": { "type": "string", "minLength": 10 },
+        "graph_id": { "type": "string" },
+        "node_id": { "type": "string" },
+        "instance_id": { "type": "string" },
+        "kind": { "type": "string", "minLength": 1 },
+        "refs": { "type": "array", "items": { "type": "string" } },
+        "influence_marks": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["node_id", "tokens_in", "tokens_out", "calls"],
+            "properties": {
+              "node_id": { "type": "string", "minLength": 1 },
+              "instance_id": { "type": "string" },
+              "tokens_in": { "type": "integer", "minimum": 0 },
+              "tokens_out": { "type": "integer", "minimum": 0 },
+              "cache_saved": { "type": "integer", "minimum": 0 },
+              "calls": { "type": "integer", "minimum": 0 },
+              "wall_ms": { "type": "integer", "minimum": 0 },
+              "verifier_cost": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "kind", "artifact_id", "verifier_id", "verdict"],
+      "properties": {
+        "evidence_id": { "type": "string", "pattern": "^EVD-[A-Z0-9-]+$" },
+        "kind": { "type": "string", "minLength": 1 },
+        "artifact_id": { "type": "string", "pattern": "^ART-[A-Z0-9-]+$" },
+        "verifier_id": { "type": "string", "minLength": 1 },
+        "verdict": { "enum": ["pass", "fail", "unknown"] },
+        "at": { "type": "string", "minLength": 10 }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_id", "level", "question", "options", "reversible", "impact", "status"],
+      "properties": {
+        "decision_id": { "type": "string", "pattern": "^DEC-[A-Z0-9-]+$" },
+        "node_id": { "type": "string" },
+        "level": { "enum": ["L0", "L1", "L2", "L3"] },
+        "question": { "type": "string", "minLength": 1 },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["option_id", "label"],
+            "properties": {
+              "option_id": { "type": "string", "minLength": 1 },
+              "label": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "default_option_id": { "type": "string" },
+        "chosen_option_id": { "type": "string" },
+        "reversible": { "type": "boolean" },
+        "impact": { "enum": ["low", "medium", "high"] },
+        "status": { "enum": ["proposed", "auto", "timed_out", "confirmed", "overridden", "blocked"] },
+        "timeout_sec": { "type": "integer", "minimum": 0 },
+        "decided_at": { "type": "string" },
+        "note": { "type": "string" }
+      }
+    },
+    "replan_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "at", "reason", "graph_version"],
+      "properties": {
+        "event_id": { "type": "string", "pattern": "^EVT-[A-Z0-9-]+$" },
+        "at": { "type": "string", "minLength": 10 },
+        "reason": { "enum": ["gate_failed", "evidence_insufficient", "scope_change", "decision_override", "failure_retry"] },
+        "graph_version": { "type": "integer", "minimum": 1 },
+        "added_nodes": { "type": "array", "items": { "type": "string" } },
+        "removed_nodes": { "type": "array", "items": { "type": "string" } },
+        "note": { "type": "string" }
+      }
+    },
+    "stage_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "status"],
+      "properties": {
+        "stage": { "enum": ["research", "design", "build", "audit", "deliver"] },
+        "status": { "enum": ["pending", "passed", "failed"] },
+        "evidence_refs": { "type": "array", "items": { "type": "string" } },
+        "decided_at": { "type": "string" }
+      }
+    },
+    "a2a": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol_version": { "type": "string" },
+        "task_id": { "type": "string" },
+        "agent_card": { "type": "object", "additionalProperties": true }
+      }
+    }
+  }
+}

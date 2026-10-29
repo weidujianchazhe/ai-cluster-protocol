@@ -1,0 +1,91 @@
+{
+  "capturedAt": "2026-10-29T12:52:20Z",
+  "adapter": "dsh-l0-adapter",
+  "backend": "dsh-host-plugin",
+  "contractVersion": "1.0.0",
+  "codeVersion": 3,
+  "capabilities": {
+    "spawn": { "level": "native", "mechanism": "subagents.startActivation / sessionController.create+prompt" },
+    "call": { "level": "native", "mechanism": "sessionController.prompt / subagents.sendMessage" },
+    "artifact_io": { "level": "native", "mechanism": "node:fs + sha256" },
+    "state_cas": { "level": "self-built", "mechanism": "single writer + monotonic version" },
+    "verify": { "level": "native", "mechanism": "acceptance verdict pass/fail/unknown" },
+    "meter": { "level": "native", "mechanism": "llm/stream usage by sessionId" },
+    "checkpoint": { "level": "partial", "mechanism": "inspect lastSeq + snapshot" },
+    "takeover": { "level": "self-built", "mechanism": "monotonic fencing token + TTL" }
+  },
+  "quality": {
+    "supports_whitebox": false,
+    "supports_prefix_cache": "observable-only",
+    "same_model_only": false,
+    "context_injection": "limited",
+    "cross_record_transactions": false,
+    "cross_process_lock": false
+  },
+  "instances": [
+    {
+      "instanceId": "ROLE-CODE-01",
+      "role": "CODE",
+      "mode": "session",
+      "sessionId": "session-00000000-0000-4000-8000-000000000001",
+      "status": "closed",
+      "usage": {
+        "calls": 2,
+        "inputTokens": 15078,
+        "outputTokens": 6,
+        "cacheReadTokens": 8448
+      }
+    },
+    {
+      "instanceId": "ROLE-CODE-02",
+      "role": "CODE",
+      "mode": "session",
+      "sessionId": "session-00000000-0000-4000-8000-000000000002",
+      "status": "closed",
+      "usage": {
+        "calls": 2,
+        "inputTokens": 1256,
+        "outputTokens": 9,
+        "cacheReadTokens": 22272
+      }
+    },
+    {
+      "instanceId": "ROLE-AUDIT-01",
+      "role": "AUDIT",
+      "mode": "activation",
+      "sessionId": "775de20d-bf1d-498c-8a23-04c298c1a9b0",
+      "status": "closed",
+      "usage": {
+        "calls": 2,
+        "inputTokens": 16279,
+        "outputTokens": 6,
+        "cacheReadTokens": 28288
+      }
+    }
+  ],
+  "meter": {
+    "instanceUsage": null,
+    "total": {
+      "calls": 24,
+      "inputTokens": 28835,
+      "outputTokens": 7502,
+      "cacheReadTokens": 3869184,
+      "note": "host-wide totals include every session in this host (other lanes), so they are NOT a reconciliation basis"
+    },
+    "bySession": {
+      "1210cf86-12cb-4117-99d3-d42784b7e0ce": { "calls": 5 },
+      "session-00000000-0000-4000-8000-000000000001": { "calls": 2 }
+    }
+  },
+  "spike": {
+    "readOnly": true,
+    "sessionController": { "prompt": true, "create": true, "follow": true, "inspect": true, "directCallable": true },
+    "subagents": {
+      "startActivation": true,
+      "sendMessage": true,
+      "providers": ["spawn", "fork", "codex", "claude-code"],
+      "configuredProvider": "spawn",
+      "providerReady": true
+    }
+  }
+}

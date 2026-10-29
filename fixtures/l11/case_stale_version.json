@@ -1,0 +1,11 @@
+{
+  "request_id": "REQ-004",
+  "graph_id": "GRAPH-20261029-D4E5F6",
+  "from_instance": "inst-A",
+  "to_instance": "inst-B",
+  "mode": "read",
+  "graph_version": "gv3",
+  "units": [
+    { "unit_id": "UNIT-012", "kind": "evidence", "status": "confirmed", "scope": "shareable", "graph_version": "gv2" }
+  ]
+}

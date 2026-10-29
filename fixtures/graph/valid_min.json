@@ -1,0 +1,20 @@
+{
+  "graph_id": "GRAPH-20261029-A1B2C3",
+  "goal": "最小工作图：一个节点、一条验收、预算就位",
+  "constraints": ["不引入第三方依赖"],
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "node 完成且有可追溯事件", "verifier_id": "fixture-check" }
+  ],
+  "budget": { "max_tokens": 1000, "max_calls": 5, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "写一份最小说明", "spec": "在 README 写一句话", "status": "planned", "deps": [] }
+  ],
+  "edges": [],
+  "state_units": [],
+  "artifacts": [],
+  "events": [
+    { "event_id": "EVT-001", "ts": "2026-10-29T00:00:00+08:00", "graph_id": "GRAPH-20261029-A1B2C3", "kind": "graph_created" }
+  ],
+  "ledger": { "entries": [] }
+}
