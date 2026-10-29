@@ -1,0 +1,29 @@
+{
+  "graph_id": "GRAPH-20261029-B00005",
+  "goal": "done 节点证据未通过（反例）",
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "x", "verifier_id": "v" }
+  ],
+  "budget": { "max_tokens": 100, "max_calls": 2, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    {
+      "node_id": "NODE-001",
+      "title": "t",
+      "spec": "s",
+      "status": "done",
+      "deps": [],
+      "verifier_ids": ["v"],
+      "evidence_required": ["test"],
+      "evidence": [
+        { "evidence_id": "EVD-001", "kind": "test", "artifact_id": "ART-001", "verifier_id": "v", "verdict": "fail", "at": "2026-10-29T01:00:00+08:00" }
+      ]
+    }
+  ],
+  "edges": [],
+  "artifacts": [
+    { "artifact_id": "ART-001", "path": "out/x.txt", "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "producer_node": "NODE-001", "verifier_ids": ["v"] }
+  ],
+  "events": [],
+  "ledger": { "entries": [] }
+}

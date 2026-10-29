@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "l0/l1_scope.schema.json",
+  "title": "L1.1 scope share request",
+  "description": "L1.1 限定作用域的读侧共享请求。判据依据：designs/_research/L1.1作用域判据-讨论稿.md §2-§10。scope 刻意非必填——未标注由语义检查拒绝（fail-closed）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "graph_id", "to_instance", "mode", "units"],
+  "properties": {
+    "request_id": { "type": "string", "pattern": "^REQ-[A-Z0-9-]+$" },
+    "graph_id": { "type": "string", "minLength": 1 },
+    "from_instance": { "type": "string" },
+    "to_instance": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["read"] },
+    "units": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/unit" } },
+    "revoke": { "type": "boolean" },
+    "revoked_units": { "type": "array", "items": { "type": "string" } },
+    "graph_version": { "type": "string" }
+  },
+  "$defs": {
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit_id", "kind", "status"],
+      "properties": {
+        "unit_id": { "type": "string", "pattern": "^UNIT-[A-Z0-9-]+$" },
+        "kind": { "enum": ["assumption", "evidence", "counterexample", "open_question", "decision", "premise"] },
+        "status": { "enum": ["proposed", "confirmed", "refuted", "pending", "superseded", "invalidated"] },
+        "scope": { "enum": ["shareable", "private"] },
+        "competing": { "type": "boolean" },
+        "graph_version": { "type": "string" },
+        "deps": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

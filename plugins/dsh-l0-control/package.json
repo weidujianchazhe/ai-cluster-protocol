@@ -1,0 +1,30 @@
+{
+  "name": "@local/dsh-l0-control",
+  "version": "0.1.0",
+  "private": true,
+  "author": "weidujianchazhe (如天之星)",
+  "license": "MIT",
+  "type": "module",
+  "description": "AI集群工作协议：许愿式 DSH 集群工作插件。派发多个子 Agent 并行工作，子 Agent 可继续递归派发；工作量大、吞吐高，token 消耗也显著更高。",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": ["lib", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "verify": "node scripts/build.mjs --check",
+    "selftest": "node scripts/selftest.mjs",
+    "contract": "node scripts/contract.mjs",
+    "persistence": "node scripts/persistence-check.mjs",
+    "native-check": "node tests/e2e/native-real/check.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

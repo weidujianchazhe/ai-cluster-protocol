@@ -1,0 +1,16 @@
+{
+  "graph_id": "GRAPH-20261029-B00003",
+  "goal": "done 节点缺证据（反例）",
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "x", "verifier_id": "v" }
+  ],
+  "budget": { "max_tokens": 100, "max_calls": 2, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "t", "spec": "s", "status": "done", "deps": [], "verifier_ids": ["v"] }
+  ],
+  "edges": [],
+  "artifacts": [],
+  "events": [],
+  "ledger": { "entries": [] }
+}
