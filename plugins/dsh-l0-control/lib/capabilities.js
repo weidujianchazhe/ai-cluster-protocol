@@ -18,6 +18,7 @@ export const TOOL_SURFACE                               = {
   wish_submit: { grade: 'self-built', nativeService: null, note: '愿望 → 图（N3 core 决策；插件只做入口与参数校验）' },
   graph_status: { grade: 'self-built', nativeService: null, note: '读 journal/快照投影，不触碰宿主会话' },
   memory_load: { grade: 'self-built', nativeService: null, note: '按需读取管理区任务卡/STATE/报告，紧凑文本 + 引用，不自动注入' },
+  memory_writeback: { grade: 'self-built', nativeService: null, note: '写回本轮结论/下一步/证据到报告，任务卡追加指针；不复制全文' },
   task_next: { grade: 'self-built', nativeService: null, note: 'ready 门控由 N3 core 计算' },
   task_claim: { grade: 'self-built', nativeService: null, note: '租约/claim 由 core 执行；实例可绑 subagents 会话' },
   evidence_submit: {
