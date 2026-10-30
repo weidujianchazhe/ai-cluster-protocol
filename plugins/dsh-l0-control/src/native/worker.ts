@@ -128,7 +128,7 @@ export function buildWorkerPrompt(input: WorkerPromptInput): string {
     '## 记忆优先（子 Agent）',
     '- 父会话的完整历史不是你的工作记忆；只使用本任务上下文与按需读取的工程记忆。',
     '- 需要项目背景/上次交接时调用 `memory_load`，只读当前任务卡/STATE/一篇记录。',
-    '- 读完把结论、证据、未完成项、下一步写回任务卡或报告；不要复述或重读全文。',
+    '- 阶段完成或交接前调用 `memory_writeback` 写回结论、证据、下一步；不要复述或重读全文。',
     '',
     '## 允许的工具（白名单，只准用这些）',
     profile.tools.map((tool) => `- ${tool}`).join('\n'),
