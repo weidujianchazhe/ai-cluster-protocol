@@ -1604,18 +1604,29 @@ export class L0ControlService {
   }
 
   async sendMessage(input: { instanceId: string; text: string; awaitOutput?: boolean; timeoutMs?: number }, caller?: any) {
-    const result = await this.native.sendMessage(input, caller);
+    const parentEnabled = Boolean(caller?.id) && this.isSessionEnabled(String(caller.id));
+    const marker = '[L0-MEMORY]';
+    const original = String(input?.text ?? '');
+    const reminded = parentEnabled && !original.includes(marker);
+    const text = reminded
+      ? `${original}\n\n${marker}\n接手/续跑时：先用 memory_load 读当前任务卡/STATE/一篇报告；只参考最近对话，不重读父会话完整历史；完成/阶段结束用 memory_writeback 写回结论、证据、下一步。`
+      : original;
+    const result = await this.native.sendMessage({ ...input, text }, caller);
+    if (result.ok && result.sessionId && parentEnabled) {
+      this.setSessionAccess(String(result.sessionId), { coordination: true }, 'inherit');
+    }
     this.appendJournal(result.ok ? 'agent_message_sent' : 'agent_message_failed', {
       instanceId: result.instanceId ?? input?.instanceId ?? null,
       sessionId: result.sessionId ?? null,
       messageId: result.messageId ?? null,
       awaitOutput: input?.awaitOutput === true,
+      memoryReminded: reminded,
       settled: (result as any)?.output?.settled ?? null,
       turnEndReason: (result as any)?.output?.turnEnd?.reason ?? null,
       replyText: (result as any)?.output?.text ?? null,
       error: result.error ?? null,
     });
-    return { ...result, persistence: await this.persist() };
+    return { ...result, memoryReminded: reminded, persistence: await this.persist() };
   }
 
   async createTeamTask(input: { subject: string; description: string; blockedBy?: string[]; writeScopes?: string[]; nodeId?: string; ownerInstance?: string }, caller?: any) {
