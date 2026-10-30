@@ -46,6 +46,7 @@ const ACTION_BY_TOOL: Record<string, string> = {
   graph_plan: 'graph.read',
   graph_commit: 'graph.write',
   memory_load: 'memory.load',
+  memory_writeback: 'memory.write',
 };
 
 function actorOf(exec: any, args: any, tenant: string) {
