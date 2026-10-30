@@ -6,7 +6,7 @@
 
 - 新增 `memory-first` Agent Preset（`presets/memory-first`）：先读任务卡/STATE/最近交接，最近对话优先，旧内容按需检索。
 - 启用插件的会话接入 `agent/pre-step` 上下文裁剪：默认保留最近 **30 个用户轮次**（`contextRecentTurns`）。
-- 新增 `memory_load` 工具：按需读取管理区任务卡、`STATE.md`、一篇报告，返回紧凑文本 + 引用 + 截断标记。
+- 新增 `memory_load` / `memory_writeback` 工具：按需读取任务卡、`STATE.md`、一篇报告；写回结论/下一步/证据为短报告并在任务卡追加指针。
 - 子 Agent 继承父 session 的 access；默认 `memory-first`（activation 路径）或记忆优先 prompt（Team member 路径）。
 - 子 Agent 默认使用最小 context pack，不继承父会话完整历史。
 - 黑板增量/摘要：`sinceSeq` 游标、最近 40 条 + 按 kind 汇总。
@@ -27,5 +27,5 @@
 
 ### 发布
 
-- 工具数 15 → 18。
+- 工具数 15 → 19。
 - 版本 0.1.1；MIT License；release 附件由 `git archive` 生成，不含 `.git`/本地状态。
