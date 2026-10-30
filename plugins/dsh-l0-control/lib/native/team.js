@@ -33,6 +33,9 @@
                     
                        
                
+                                                                                               
+                                                    
+                    
                                                          
                               
  
@@ -181,8 +184,9 @@ export class NativeTeam {
       return { ok: false, error: 'instance-exists', instanceId, hint: '同职务换 index，或先 send_message 续跑' };
     }
 
-    // 路径 1：Team member（只有 Lead 能 spawnTeammate）
-    if (this.leadCanSpawnTeammate(caller)) {
+    // 路径 1：Team member（A；只有 Lead 能 spawnTeammate；via=activation/provider 时跳过）
+    const via = input.via ?? 'auto';
+    if ((via === 'auto' || via === 'team') && this.leadCanSpawnTeammate(caller)) {
       try {
         const teams = this.agentTeams;
         const memberName = NativeTeam.memberName(role, index);
@@ -191,7 +195,7 @@ export class NativeTeam {
           description: input.label ?? `${role} · ${instanceId}`,
           prompt: [{ type: 'text', text: this.promptText(input, role, instanceId) }],
           context: 'fresh',
-          provider: this.options.provider,
+          provider: input.provider ?? this.options.provider,
           signal: liveSignal(),
         });
         const member = spawned?.member ?? null;
@@ -243,7 +247,7 @@ export class NativeTeam {
     }
     try {
       const activation = await subagents.startActivation({
-        provider: this.options.provider,
+        provider: input.provider ?? this.options.provider,
         label: input.label ?? instanceId,
         request: {
           prompt: [{ type: 'text', text: this.promptText(input, role, instanceId) }],
