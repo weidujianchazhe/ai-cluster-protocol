@@ -4,7 +4,7 @@
 
 ## 它是什么
 
-把 **AI集群工作协议** 做成 DSH 原生插件：一个 `l0control` 服务 + 18 个工具，直接复用宿主原生面
+把 **AI集群工作协议** 做成 DSH 原生插件：一个 `l0control` 服务 + 19 个工具，直接复用宿主原生面
 （`agentTeams` / `subagents` / `sessionController` / `tools`），Python `control_plane/` 退为行为 oracle。
 
 **0.1.1 记忆优先**：新会话可选 `memory-first` preset；启用插件的会话在 `agent/pre-step` 只保留最近 30 个用户轮次；`memory_load` 按需读取管理区任务卡/STATE/报告；子 Agent 继承 access、记忆 prompt 与 context pack。
