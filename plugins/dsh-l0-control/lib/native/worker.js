@@ -21,7 +21,7 @@
                   
  
 
-const BASE_TOOLS = ['graph_status', 'task_next', 'task_claim', 'evidence_submit', 'pass_gate', 'verify_done', 'team_status', 'memory_load'];
+const BASE_TOOLS = ['graph_status', 'task_next', 'task_claim', 'evidence_submit', 'pass_gate', 'verify_done', 'team_status', 'memory_load', 'memory_writeback'];
 
 export const ROLE_PROFILES                              = {
   CODE: {
