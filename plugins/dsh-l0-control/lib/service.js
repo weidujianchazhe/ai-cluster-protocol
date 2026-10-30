@@ -770,6 +770,73 @@ export class L0ControlService {
   }
 
   /**
+   * 写回工程记忆：把本轮结论/证据/下一步写成一篇短报告；有任务卡时在卡末追加指针。
+   * 只写结论与指针，不复制整段上下文。
+   */
+  async memoryWriteback(input                                                                            = {}) {
+    const managementDir = path.resolve(this.workspaceRoot, '..', 'AI集群工作协议-管理区');
+    const summary = String(input?.summary ?? '').trim();
+    if (!summary) return { ok: false, error: 'summary-required' };
+    const cleanName = (value         , ext        )                => {
+      const raw = String(value ?? '').trim();
+      if (!raw) return null;
+      const base = path.basename(raw);
+      if (!base || base === '.' || base === '..' || base !== raw) return null;
+      return base.endsWith(ext) ? base : `${base}${ext}`;
+    };
+    const taskCard = cleanName(input?.taskCard, '.md');
+    const next = String(input?.next ?? '').trim();
+    const evidence = String(input?.evidence ?? '').trim();
+    const reportsDir = path.join(managementDir, 'reports');
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const reportName = `MEM-${stamp}.md`;
+    const reportPath = path.join(reportsDir, reportName);
+    const body = [
+      `# 记忆写回 ${new Date().toISOString()}`,
+      '',
+      `- 任务卡：${taskCard ?? '—'}`,
+      '',
+      '## 本轮结论',
+      summary,
+      '',
+      '## 下一步',
+      next || '—',
+      '',
+      '## 证据/指针',
+      evidence || '—',
+      '',
+    ].join('\n');
+    fs.writeFileSync(reportPath, body, 'utf8');
+    let cardPath                = null;
+    if (taskCard) {
+      const candidate = path.join(managementDir, 'tasks', taskCard);
+      if (fs.existsSync(candidate)) {
+        cardPath = candidate;
+        const block = [
+          '',
+          `## 记忆写回 ${new Date().toISOString()}`,
+          `- 结论：${summary.replace(/\n/g, ' ').slice(0, 500)}`,
+          `- 下一步：${(next || '—').replace(/\n/g, ' ').slice(0, 300)}`,
+          `- 报告：reports/${reportName}`,
+          '',
+        ].join('\n');
+        fs.appendFileSync(candidate, block, 'utf8');
+      }
+    }
+    return {
+      ok: true,
+      action: 'memory_writeback',
+      result: {
+        managementDir,
+        report: { name: reportName, path: reportPath, chars: body.length },
+        taskCard: taskCard ? { name: taskCard, path: cardPath, appended: Boolean(cardPath) } : null,
+        hint: '后续只读报告/任务卡指针；不要把完整本轮上下文重新塞回对话。',
+      },
+    };
+  }
+
+  /**
    * 按需读取管理区/工程记忆，返回紧凑任务包；不自动注入，不返回全量历史。
    * 只读：任务卡 + STATE + 一篇报告 + 可用引用列表；总字符数有上限。
    */
@@ -1485,6 +1552,8 @@ export class L0ControlService {
                       
                          
                  
+                                                      
+                      
                         
                            
                                                                                                         
@@ -1521,7 +1590,17 @@ export class L0ControlService {
       messageId: result.messageId ?? null,
       error: result.error ?? null,
     });
-    return { ...result, persistence: await this.persist() };
+    return { ...result, persistence: await this.persist(), memorySensitivity: {
+      strategy: input?.via ?? 'auto',
+      parentEnabled,
+      contextTrimEnabled: Boolean(this.config.contextTrimEnabled),
+      recentTurns: Number(this.config.contextRecentTurns ?? 30),
+      agentPreset: agentPreset ?? null,
+      contextPackSize: worker.contextPack?.length ?? 0,
+      hint: parentEnabled
+        ? '父会话已启用裁剪与记忆；A=team 记忆 prompt，B=activation preset，C=provider。读大文件前先 memory_load，读完 memory_writeback。'
+        : '父会话未启用插件：子 Agent 不继承 access/裁剪；需要时先启用父会话再选 B/C。',
+    } };
   }
 
   async sendMessage(input                                                                                 , caller      ) {
