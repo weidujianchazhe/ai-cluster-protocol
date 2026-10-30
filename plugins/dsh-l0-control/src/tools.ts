@@ -222,6 +222,23 @@ export function buildTools(service: L0ControlService): ToolDefinition[] {
       execute: (args) => service.memoryLoad(args ?? {}),
     },
     {
+      name: named('memory_writeback'),
+      description: '把本轮结论/下一步/证据写成短报告；有任务卡时在卡末追加指针。只写结论，不复制整段上下文。',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskCard: { type: 'string', description: '任务卡文件名（tasks/ 下；可省略 .md）' },
+          summary: { type: 'string', description: '本轮结论（必填，建议 1–5 条）' },
+          next: { type: 'string', description: '下一步指针' },
+          evidence: { type: 'string', description: '证据/文件路径/命令结果摘要' },
+        },
+        required: ['summary'],
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.memoryWriteback(args ?? {}),
+    },
+    {
       name: named('team_status'),
       description: '原生通道：读 agentTeams 团队成员板与任务板，并列出本插件派生的真实子 Agent 实例（caller 取 exec.agent，缺 caller fail-closed）。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
@@ -247,6 +264,8 @@ export function buildTools(service: L0ControlService): ToolDefinition[] {
             description: '任务上下文清单（每行一条事实/约束）',
           },
           cwd: { type: 'string', description: '子 Agent 工作目录（缺省 workspaceRoot）' },
+          via: { type: 'string', enum: ['auto', 'team', 'activation', 'provider'], description: '组装策略：auto/team=A；activation=B；provider=C（需已注册 provider）' },
+          provider: { type: 'string', description: 'subagents provider 名（C 用；缺省 spawn）' },
         },
         required: ['role', 'task'],
         additionalProperties: false,
