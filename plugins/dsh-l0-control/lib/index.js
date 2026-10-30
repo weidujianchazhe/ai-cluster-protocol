@@ -46,6 +46,7 @@ const ACTION_BY_TOOL                         = {
   graph_plan: 'graph.read',
   graph_commit: 'graph.write',
   memory_load: 'memory.load',
+  memory_writeback: 'memory.write',
 };
 
 function actorOf(exec     , args     , tenant        ) {
