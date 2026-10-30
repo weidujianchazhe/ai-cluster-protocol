@@ -42,6 +42,8 @@ export const CONFIG_SPEC                            = {
   uiPort: { type: 'number', default: 47831, description: '只读 UI 侧车端口（0=随机；面板默认 47831）' },
   updateRepo: { type: 'string', default: 'weidujianchazhe/ai-cluster-protocol', description: '检查更新用的 GitHub 仓库（owner/name；空=关闭检查）' },
   updateRef: { type: 'string', default: 'main', description: '检查更新用的分支/标签' },
+  contextTrimEnabled: { type: 'boolean', default: true, description: '启用对话的 Agent pre-step 上下文裁剪（只保留最近 N 个用户轮次）' },
+  contextRecentTurns: { type: 'number', default: 30, description: '上下文裁剪保留的最近用户轮次数（1–100）' },
 };
 
                                
@@ -68,6 +70,8 @@ export const CONFIG_SPEC                            = {
                  
                      
                     
+                              
+                             
   
 
 function coerce(value         , type           )          {

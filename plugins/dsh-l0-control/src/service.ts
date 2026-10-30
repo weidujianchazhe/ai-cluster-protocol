@@ -490,6 +490,38 @@ export class L0ControlService {
     );
   }
 
+  /**
+   * 工作图**组成因子**：`graph_plan` —— 纯校验 + 预览（errors/warnings/ready），零写入。
+   * 不做固定模板：节点/依赖由调用方按需求给出。
+   */
+  async graphPlan(input: { spec?: Record<string, unknown>; nodes?: unknown[]; wish?: string; policies?: Record<string, unknown> }) {
+    const spec = input?.spec ?? { wish: input?.wish ?? '', nodes: input?.nodes ?? [], policies: input?.policies ?? {} };
+    this.appendJournal('graph_plan_preview', {
+      wish: String((spec as { wish?: string }).wish ?? '').slice(0, 200),
+      nodes: Array.isArray((spec as { nodes?: unknown[] }).nodes) ? ((spec as { nodes: unknown[] }).nodes as unknown[]).length : 0,
+    });
+    return this.withCore('graph_plan', (core) =>
+      core.graphPlan ? core.graphPlan(spec) : Promise.resolve({ delegated: false, reason: 'core.graphPlan 未实现' }),
+    );
+  }
+
+  /** 工作图组成因子：`graph_commit` —— 校验通过后落图；同一份图重复提交幂等。 */
+  async graphCommit(input: { spec?: Record<string, unknown>; nodes?: unknown[]; wish?: string; policies?: Record<string, unknown> }) {
+    const spec = input?.spec ?? { wish: input?.wish ?? '', nodes: input?.nodes ?? [], policies: input?.policies ?? {} };
+    const result = await this.withCore('graph_commit', (core) =>
+      core.graphCommit ? core.graphCommit(spec) : Promise.resolve({ delegated: false, reason: 'core.graphCommit 未实现' }),
+    );
+    const row = result as { ok?: boolean; committed?: boolean; idempotent?: boolean; counts?: unknown; errors?: unknown };
+    this.appendJournal('graph_committed', {
+      ok: row?.ok === true,
+      committed: row?.committed === true,
+      idempotent: row?.idempotent === true,
+      counts: row?.counts ?? null,
+      errors: Array.isArray(row?.errors) ? (row.errors as unknown[]).length : 0,
+    });
+    return result;
+  }
+
   // ── 子 Agent（递归）快照：team_snapshot 不含 descendants，单独持久化 ──
   /** 从 journal 恢复每个 session 最后一条 `descendants_snapshot`。 */
   private restoreDescendantSnapshots(): void {
@@ -738,15 +770,127 @@ export class L0ControlService {
   }
 
   /**
+   * 按需读取管理区/工程记忆，返回紧凑任务包；不自动注入，不返回全量历史。
+   * 只读：任务卡 + STATE + 一篇报告 + 可用引用列表；总字符数有上限。
+   */
+  async memoryLoad(input: { taskCard?: string; record?: string; maxChars?: number } = {}) {
+    const managementDir = path.resolve(this.workspaceRoot, '..', 'AI集群工作协议-管理区');
+    const maxChars = Math.max(1000, Math.min(30000, Number(input?.maxChars ?? 12000)));
+    const cleanName = (value: unknown, ext: string): string | null => {
+      const raw = String(value ?? '').trim();
+      if (!raw) return null;
+      const base = path.basename(raw);
+      if (!base || base === '.' || base === '..' || base !== raw) return null;
+      return base.endsWith(ext) ? base : `${base}${ext}`;
+    };
+    const taskCard = cleanName(input?.taskCard, '.md');
+    const record = cleanName(input?.record, '.md');
+    const read = (file: string): { path: string; text: string; chars: number } | null => {
+      try {
+        if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return null;
+        const text = fs.readFileSync(file, 'utf8');
+        return { path: file, text, chars: text.length };
+      } catch {
+        return null;
+      }
+    };
+    const state = read(path.join(managementDir, 'STATE.md'));
+    const card = taskCard ? read(path.join(managementDir, 'tasks', taskCard)) : null;
+    const report = record ? read(path.join(managementDir, 'reports', record)) : null;
+    const list = (dir: string, max = 20): string[] => {
+      try {
+        return fs.readdirSync(dir, { withFileTypes: true })
+          .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+          .map((entry) => entry.name)
+          .sort()
+          .slice(0, max);
+      } catch {
+        return [];
+      }
+    };
+    const parts: string[] = [];
+    if (card) parts.push(`# TASK CARD ${taskCard}\n${card.text}`);
+    if (state) parts.push(`# STATE.md\n${state.text}`);
+    if (report) parts.push(`# RECORD ${record}\n${report.text}`);
+    let text = parts.join('\n\n');
+    const truncated = text.length > maxChars;
+    if (truncated) text = text.slice(0, maxChars);
+    return {
+      ok: true,
+      action: 'memory_load',
+      result: {
+        workspaceRoot: this.workspaceRoot,
+        managementDir,
+        taskCard: card ? { name: taskCard, path: card.path, chars: card.chars } : null,
+        state: state ? { path: state.path, chars: state.chars } : null,
+        record: report ? { name: record, path: report.path, chars: report.chars } : null,
+        refs: { tasks: list(path.join(managementDir, 'tasks')), reports: list(path.join(managementDir, 'reports')) },
+        text,
+        chars: text.length,
+        maxChars,
+        truncated,
+        hint: '只按需读取；读完把结论/下一步写回任务卡或报告，不把全文带进后续轮次。',
+      },
+    };
+  }
+
+  /**
+   * 只保留最近 N 个用户轮次（从最近 user 消息边界开始），避免把整段历史发给模型。
+   * 工具按轮次成组，切在 user 边界上，避免产生孤立的 tool 结果。
+   */
+  installContextGuard(): () => void {
+    const agents = this.ctx.get?.('agents');
+    if (!agents?.on || typeof this.ctx.on !== 'function') return () => {};
+    const attached = new WeakSet<object>();
+    const attach = (agent: any) => {
+      if (!agent?.ctx || typeof agent.ctx.on !== 'function' || attached.has(agent)) return;
+      attached.add(agent);
+      const sessionId = String(agent.id ?? '');
+      agent.ctx.on('agent/pre-step', async (payload: any, next: () => Promise<any>) => {
+        const decision = await next();
+        if (!this.config.contextTrimEnabled || !sessionId || !this.isSessionEnabled(sessionId)) return decision;
+        if (!decision || decision.kind === 'reject' || !Array.isArray(decision.messages)) return decision;
+        const maxTurns = Math.max(1, Math.min(100, Number(this.config.contextRecentTurns ?? 10)));
+        const messages = decision.messages;
+        const userIndexes: number[] = [];
+        for (let i = 0; i < messages.length; i += 1) {
+          if (String(messages[i]?.role ?? '') === 'user') userIndexes.push(i);
+        }
+        if (userIndexes.length <= maxTurns) return decision;
+        const start = userIndexes[userIndexes.length - maxTurns];
+        return { ...decision, messages: messages.slice(start) };
+      });
+    };
+    try {
+      for (const agent of agents.list?.() ?? []) attach(agent);
+    } catch {
+      // 宿主没有可枚举的 Agent 时，只靠后续 agent/created 事件
+    }
+    const off = this.ctx.on('agent/created', (event: any) => attach(event?.agent));
+    return typeof off === 'function' ? off : () => {};
+  }
+
+  /**
    * 只读 UI 快照（侧车专用，不参与决策）。
    *
    * **按对话窗口（session）隔离**：`uiSnapshot({sessionId})` 只返回该 session 的团队板；
    * 有 live caller 且 caller.id === sessionId 才走实时投影，否则用该 session 的 `team_snapshot`；
    * 未知 session / 未指定 session 一律 `source='none'`，**不跨 session 复用**。
    */
-  async uiSnapshot(input: { sessionId?: string } = {}) {
+  async uiSnapshot(input: { sessionId?: string; sinceSeq?: number } = {}) {
     const graphView = await this.graphStatus();
     const coreGraph = (graphView as any)?.graph?.result ?? (graphView as any)?.graph ?? null;
+    // core 内存态偶尔落后于持久层（例如 graph_commit 后 UI 侧实例未重放）；
+    // 显示计数时以 recoveryReport.state 兜底，避免“图已落盘但面板 0 nodes”。
+    const recovered = (graphView as any)?.persistence?.recoveryReport?.state;
+    const recoveredNodes = recovered?.nodes && typeof recovered.nodes === 'object' ? Object.values(recovered.nodes) : [];
+    const recoveredEdges = Array.isArray(recovered?.edges) ? recovered.edges : [];
+    const recoveredDone = recoveredNodes.filter((node: any) => node?.status === 'done').length;
+    const effectiveCounts = coreGraph?.counts && Number(coreGraph.counts.nodes) > 0
+      ? coreGraph.counts
+      : recoveredNodes.length
+        ? { nodes: recoveredNodes.length, edges: recoveredEdges.length, done: recoveredDone, blocked: 0 }
+        : coreGraph?.counts ?? null;
     // 只认调用方显式给的 sessionId：不拿 lastCaller 兜底，避免把本窗口数据喂给别的窗口
     const requested = input?.sessionId ? String(input.sessionId) : null;
     let team: Record<string, unknown>;
@@ -782,7 +926,13 @@ export class L0ControlService {
       { id: 'plugins', label: '插件目录', path: path.join(this.workspaceRoot, 'plugins'), exists: fs.existsSync(path.join(this.workspaceRoot, 'plugins')), entries: listEntries(path.join(this.workspaceRoot, 'plugins')) },
       { id: 'state', label: '状态目录', path: this.stateDir, exists: fs.existsSync(this.stateDir), entries: listEntries(this.stateDir) },
     ];
-    const blackboard = this.readJournal().slice(-40).reverse().map((row) => ({
+    // 黑板：**增量**（sinceSeq 之后的新行，最多 40 条）+ 摘要（不全量回传历史）
+    const journalRows = this.readJournal();
+    const journalTotal = journalRows.length;
+    const sinceRaw = Number((input as { sinceSeq?: number })?.sinceSeq);
+    const sinceSeq = Number.isFinite(sinceRaw) && sinceRaw >= 0 ? Math.floor(sinceRaw) : null;
+    const BLACKBOARD_LIMIT = 40;
+    const toRow = (row: Record<string, unknown>) => ({
       at: row.at ?? null,
       kind: row.kind ?? null,
       nodeId: row.nodeId ?? row.node_id ?? null,
@@ -790,7 +940,60 @@ export class L0ControlService {
       action: row.action ?? null,
       status: row.status ?? null,
       actor: row.actor ?? row.instanceId ?? row.instance_id ?? null,
-    }));
+    });
+    let blackboardMode: 'initial' | 'incremental' | 'fallback' = 'initial';
+    let sliceStart = Math.max(0, journalTotal - BLACKBOARD_LIMIT);
+    if (sinceSeq !== null) {
+      if (sinceSeq <= journalTotal) {
+        // 增量：从 cursor 到末尾；超过上限就取末尾 40 并标记 truncated
+        sliceStart = sinceSeq;
+        blackboardMode = 'incremental';
+      } else {
+        // cursor 超界 / 倒回（journal 被截断或换了状态目录）→ 回退最近 40
+        blackboardMode = 'fallback';
+      }
+    }
+    const pendingRows = journalRows.slice(sliceStart);
+    const blackboardTruncated = blackboardMode !== 'incremental' && journalTotal > BLACKBOARD_LIMIT
+      ? true
+      : pendingRows.length > BLACKBOARD_LIMIT;
+    const blackboardRows = pendingRows.slice(-BLACKBOARD_LIMIT);
+    const blackboard = blackboardRows.reverse().map(toRow);
+
+    // 摘要：总数 / 按 kind / 最近失败与决策 / 旧事件数（UI 只显示摘要，不拉历史）
+    const byKind: Record<string, number> = {};
+    for (const row of journalRows) {
+      const kind = String(row?.kind ?? 'unknown');
+      byKind[kind] = (byKind[kind] ?? 0) + 1;
+    }
+    const failedDecisions = journalRows
+      .filter((row) => {
+        const status = String(row?.status ?? '').toLowerCase();
+        const kind = String(row?.kind ?? '');
+        return (
+          status === 'rejected' ||
+          status === 'failed' ||
+          kind.includes('rejected') ||
+          kind.includes('failed') ||
+          row?.error != null
+        );
+      })
+      .slice(-5)
+      .reverse()
+      .map((row) => ({
+        at: row.at ?? null,
+        kind: row.kind ?? null,
+        reason: row.reason ?? row.error ?? row.message ?? null,
+        nodeId: row.nodeId ?? row.node_id ?? null,
+      }));
+    const blackboardSummary = {
+      total: journalTotal,
+      shown: blackboardRows.length,
+      older: Math.max(0, journalTotal - blackboardRows.length),
+      byKind,
+      failedDecisions,
+      cursor: journalTotal,
+    };
     let managementRevision: string | null = null;
     try {
       const statePath = path.join(managementDir, 'STATE.md');
@@ -817,10 +1020,11 @@ export class L0ControlService {
     } = { ok: false, count: 0, source: 'none', capturedAt: null };
     try {
       const subagents = this.ctx.get?.('subagents');
-      const liveSession = this.lastCaller?.id ? String(this.lastCaller.id) : null;
-      if (requested && liveSession === requested && subagents?.listDescendants) {
-        // live：实时算（同时把结果落快照，供下次 reload 用）
-        const rows = await subagents.listDescendants(this.lastCaller.id);
+      if (requested && subagents?.listDescendants) {
+        // 只要 UI 指定了 sessionId，就直接以它作为 root 拉实时 descendants；
+        // 不要求 lastCaller 等于该 session——子 Agent 调工具后 lastCaller 会变成子 Agent，
+        // 此时 lead 窗口仍应看到“正在运行”的子孙。
+        const rows = await subagents.listDescendants(requested);
         const items = Array.isArray(rows) ? rows : [];
         const children = items.filter((row: any) => row?.kind === 'child');
         descendants = {
@@ -883,9 +1087,14 @@ export class L0ControlService {
       graph: coreGraph ? {
         version: coreGraph.version ?? null,
         ready: coreGraph.ready ?? [],
-        counts: coreGraph.counts ?? null,
+        counts: effectiveCounts,
       } : null,
       blackboard,
+      blackboardCursor: journalTotal,
+      blackboardTruncated,
+      blackboardMode,
+      sinceSeq,
+      blackboardSummary,
       workspaces,
       management,
     };
@@ -1268,14 +1477,47 @@ export class L0ControlService {
   }
 
   // ── 原生执行层（真实 Agent / 原生团队板） ──────────────────
-  async spawnAgent(input: { role: string; task: string; index?: number; label?: string; maxDepth?: number; agentPreset?: string; cwd?: string }, caller?: any) {
-    const result = await this.native.spawnAgent({ ...input, cwd: input?.cwd ?? this.workspaceRoot }, caller);
+  async spawnAgent(input: {
+    role: string;
+    task: string;
+    index?: number;
+    label?: string;
+    maxDepth?: number;
+    agentPreset?: string;
+    cwd?: string;
+    capability?: string;
+    contextPack?: string[];
+    worker?: { enabled?: boolean; capability?: string; contextPack?: string[]; maxIterations?: number };
+  }, caller?: any) {
+    // 能力包可以在顶层或 worker 子对象里给（顶层写法更顺手）
+    const parentEnabled = Boolean(caller?.id) && this.isSessionEnabled(String(caller.id));
+    const parentContextPack = Array.isArray(input?.contextPack) ? input.contextPack : [];
+    const worker = {
+      ...(input?.worker ?? {}),
+      ...(input?.capability ? { capability: input.capability } : {}),
+      contextPack: parentContextPack.length ? parentContextPack : (parentEnabled ? ['父会话只提供任务定位；不继承完整历史。'] : []),
+      enabled: parentEnabled || input?.worker?.enabled === true || Boolean(input?.capability) || parentContextPack.length > 0,
+    };
+    const agentPreset = input?.agentPreset ?? (parentEnabled ? 'memory-first' : undefined);
+    const result = await this.native.spawnAgent({ ...input, agentPreset, worker, cwd: input?.cwd ?? this.workspaceRoot }, caller);
+    if (result.ok && result.sessionId && parentEnabled) {
+      this.setSessionAccess(
+        String(result.sessionId),
+        {
+          coordination: true,
+          management: this.managementFor(String(caller.id)),
+        },
+        'inherit',
+      );
+    }
     this.appendJournal(result.ok ? 'agent_spawned' : 'agent_spawn_failed', {
       instanceId: result.instanceId ?? null,
       sessionId: result.sessionId ?? null,
       role: result.role ?? String(input?.role ?? '').toUpperCase(),
       label: input?.label ?? null,
       parentSessionId: caller?.id ?? null,
+      parentEnabled,
+      agentPreset: agentPreset ?? null,
       messageId: result.messageId ?? null,
       error: result.error ?? null,
     });

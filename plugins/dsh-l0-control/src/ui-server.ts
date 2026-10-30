@@ -11,8 +11,8 @@ import http from 'node:http';
 export interface UiServerOptions {
   host?: string;
   port?: number;
-  /** `sessionId` 来自 `?sessionId=`；`workspaceRoot` 来自 `?workspaceRoot=`（多工作区选实例）。 */
-  getSnapshot: (sessionId?: string, workspaceRoot?: string) => unknown | Promise<unknown>;
+  /** `sessionId` 来自 `?sessionId=`；`workspaceRoot` 来自 `?workspaceRoot=`；`sinceSeq` 来自 `?sinceSeq=`（黑板增量）。 */
+  getSnapshot: (sessionId?: string, workspaceRoot?: string, sinceSeq?: number) => unknown | Promise<unknown>;
   /** 工作区 registry 列表 + 各自 counts（`/ui/workspaces`）。 */
   getWorkspaces?: () => unknown | Promise<unknown>;
   /** 读某对话的启用状态（缺省 = 恒 disabled）。 */
@@ -76,15 +76,19 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     const path = rawUrl.split('?')[0];
     let sessionId: string | undefined;
     let workspaceRoot: string | undefined;
+    let sinceSeq: number | undefined;
     try {
       const query = new URLSearchParams(rawUrl.split('?')[1] ?? '');
       const value = query.get('sessionId');
       if (value && String(value).trim()) sessionId = String(value).trim();
       const ws = query.get('workspaceRoot');
       if (ws && String(ws).trim()) workspaceRoot = String(ws).trim();
+      const since = query.get('sinceSeq');
+      if (since && Number.isFinite(Number(since))) sinceSeq = Math.max(0, Math.floor(Number(since)));
     } catch {
       sessionId = undefined;
       workspaceRoot = undefined;
+      sinceSeq = undefined;
     }
     if (method === 'OPTIONS') {
       res.writeHead(204, {
@@ -214,7 +218,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
       return;
     }
     try {
-      const snapshot = await options.getSnapshot(sessionId, workspaceRoot);
+      const snapshot = await options.getSnapshot(sessionId, workspaceRoot, sinceSeq);
       send(res, 200, path === '/ui/health' ? { ok: true, at: new Date().toISOString() } : snapshot);
     } catch (error) {
       send(res, 500, { ok: false, error: 'snapshot-failed', message: String((error as Error)?.message ?? error) });

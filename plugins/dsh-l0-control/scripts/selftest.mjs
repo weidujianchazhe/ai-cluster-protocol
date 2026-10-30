@@ -60,13 +60,18 @@ const ctx = {
 const mod = await import(pathToFileURL(path.join(root, 'lib', 'index.js')).href);
 const handle = mod.apply(ctx, { workspaceRoot, stateDir: '.l0-control-selftest' });
 
-check('apply: 注册 15 个工具（含 project_init）', () => ({
-  ok: registered.length === 15 && registered.includes('project_init'),
+check('apply: 注册 18 个工具（含 project_init / graph_plan / graph_commit / memory_load）', () => ({
+  ok:
+    registered.length === 18 &&
+    registered.includes('project_init') &&
+    registered.includes('graph_plan') &&
+    registered.includes('graph_commit') &&
+    registered.includes('memory_load'),
   detail: { tools: registered, handle: handle?.tools ?? null },
 }));
 
 check('apply: 注册 l0control 服务', () => ({
-  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === 15,
+  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === 18,
   detail: { describe: provided.l0control?.describe?.().toolCount ?? null },
 }));
 
@@ -132,16 +137,18 @@ check('export: 真写 capabilities.json / STATE.md', async () => {
   };
 });
 
-check('capabilities: native 分级覆盖 15 工具', () => {
+check('capabilities: native 分级覆盖 18 工具', () => {
   const grades = mod.CAPABILITIES.tools;
   const keys = Object.keys(grades);
   const nativeTools = keys.filter((key) => grades[key].grade === 'native');
   return {
     ok:
-      keys.length === 15 &&
+      keys.length === 18 &&
       nativeTools.includes('team_status') &&
       grades.team_status.nativeService === 'agentTeams' &&
-      grades.project_init.grade === 'self-built',
+      grades.project_init.grade === 'self-built' &&
+      grades.graph_plan.grade === 'self-built' &&
+      grades.graph_commit.grade === 'self-built',
     detail: { keys, nativeTools },
   };
 });
@@ -551,6 +558,181 @@ check('ui-server: GET/POST /ui/access 往返 + 非法体 400', async () => {
   }
 });
 
+check('graphspec: plan 零写入 / 分支+汇合合法 / 非法四类零写入 / commit 幂等 / wish_submit 不建图', async () => {
+  const { L0ControlService } = await import(pathToFileURL(path.join(root, 'lib', 'service.js')).href);
+  const ctx = { get: () => undefined, provide: () => {}, effect: () => {}, tabs: null, tools: { register: () => {} } };
+  const svc = new L0ControlService(ctx, { workspaceRoot, stateDir: '.l0-control-graphspec' }, {});
+  const counts = async () => {
+    const status = await svc.graphStatus();
+    return status?.graph?.result?.counts ?? status?.graph?.counts ?? { nodes: 0 };
+  };
+
+  const diamond = {
+    wish: '做一个带分支与汇合的图',
+    nodes: [
+      { nodeId: 'A', title: 'A 调研', stage: 'research', deps: [], acceptance: { kind: 'exists' } },
+      { nodeId: 'B', title: 'B 实现', stage: 'build', deps: ['A'], acceptance: { kind: 'exists' } },
+      { nodeId: 'C', title: 'C 测试', stage: 'build', deps: ['A'], acceptance: { kind: 'exists' } },
+      { nodeId: 'D', title: 'D 交付', stage: 'deliver', deps: ['B', 'C'], acceptance: { kind: 'exists' } },
+    ],
+  };
+
+  const before = await counts();
+  const plan = await svc.graphPlan(diamond);
+  const afterPlan = await counts();
+  const committed = await svc.graphCommit(diamond);
+  const afterCommit = await counts();
+  const again = await svc.graphCommit(diamond);
+  const afterAgain = await counts();
+
+  const badCycle = { nodes: [
+    { nodeId: 'X', title: 'x', deps: ['Y'], acceptance: { kind: 'exists' } },
+    { nodeId: 'Y', title: 'y', deps: ['X'], acceptance: { kind: 'exists' } },
+  ] };
+  const badUnknown = { nodes: [{ nodeId: 'X', title: 'x', deps: ['NOPE'], acceptance: { kind: 'exists' } }] };
+  const badNoAcceptance = { nodes: [{ nodeId: 'X', title: 'x', deps: [] }] };
+  const badDup = { nodes: [
+    { nodeId: 'X', title: 'x', acceptance: { kind: 'exists' } },
+    { nodeId: 'X', title: 'x2', acceptance: { kind: 'exists' } },
+  ] };
+  const badPlan = await svc.graphPlan(badCycle);
+  const badUnknownPlan = await svc.graphPlan(badUnknown);
+  const badNoAccPlan = await svc.graphPlan(badNoAcceptance);
+  const badDupPlan = await svc.graphPlan(badDup);
+  const badCommit = await svc.graphCommit(badCycle);
+  const afterBad = await counts();
+
+  const wish = await svc.wishSubmit({ text: '这条愿望不应该自动生成固定 6 节点' });
+  const afterWish = await counts();
+
+  return {
+    ok:
+      (before?.nodes ?? 0) === 0 &&
+      plan?.ok === true &&
+      Array.isArray(plan.ready) && plan.ready.length === 1 && plan.ready[0] === 'A' &&
+      plan.counts?.nodes === 4 &&
+      plan.errors.length === 0 &&
+      (afterPlan?.nodes ?? 0) === 0 &&
+      committed?.ok === true &&
+      committed.committed === true &&
+      (afterCommit?.nodes ?? 0) === 4 &&
+      again?.idempotent === true &&
+      (afterAgain?.nodes ?? 0) === 4 &&
+      badPlan.ok === false && badPlan.errors.some((e) => e.code === 'cycle') &&
+      badUnknownPlan.errors.some((e) => e.code === 'dep-unknown') &&
+      badNoAccPlan.errors.some((e) => e.code === 'node-acceptance-required') &&
+      badDupPlan.errors.some((e) => e.code === 'duplicate-node-id') &&
+      badCommit.ok === false && badCommit.committed === false &&
+      (afterBad?.nodes ?? 0) === 4 &&
+      wish?.ok === true && wish?.graphPlanRequired === true && (wish?.nodes ?? []).length === 0 &&
+      (afterWish?.nodes ?? 0) === 4,
+    detail: {
+      plan: { ok: plan?.ok, ready: plan?.ready, order: plan?.order, counts: plan?.counts, errors: plan?.errors },
+      committed: { ok: committed?.ok, counts: committed?.counts, ready: committed?.ready },
+      idempotent: again?.idempotent,
+      bad: {
+        cycle: badPlan.errors?.map((e) => e.code),
+        unknown: badUnknownPlan.errors?.map((e) => e.code),
+        noAcceptance: badNoAccPlan.errors?.map((e) => e.code),
+        duplicate: badDupPlan.errors?.map((e) => e.code),
+      },
+      afterCounts: { before, afterPlan, afterCommit, afterAgain, afterBad, afterWish },
+      wish: { ok: wish?.ok, graphPlanRequired: wish?.graphPlanRequired, nodes: wish?.nodes },
+    },
+  };
+});
+
+check('blackboard: cursor 增量 / 超界回退 / 摘要计数 / 上限 40', async () => {
+  const { L0ControlService } = await import(pathToFileURL(path.join(root, 'lib', 'service.js')).href);
+  const ctx = { get: () => undefined, provide: () => {}, effect: () => {}, tools: { register: () => {} } };
+  const stateDir = '.l0-control-blackboard';
+  const svc = new L0ControlService(ctx, { workspaceRoot, stateDir }, {});
+  for (let index = 0; index < 60; index += 1) {
+    svc.appendJournal(index % 10 === 0 ? 'verify_done_rejected' : 'task_claimed', { nodeId: `N-${index}`, index });
+  }
+
+  const first = await svc.uiSnapshot({ sessionId: 'bb' });
+  const cursor1 = first.blackboardCursor;
+  const second = await svc.uiSnapshot({ sessionId: 'bb', sinceSeq: cursor1 });
+  svc.appendJournal('evidence_submitted', { nodeId: 'N-extra-1' });
+  svc.appendJournal('evidence_submitted', { nodeId: 'N-extra-2' });
+  svc.appendJournal('verify_done_requested', { nodeId: 'N-extra-3' });
+  const third = await svc.uiSnapshot({ sessionId: 'bb', sinceSeq: cursor1 });
+  const fallback = await svc.uiSnapshot({ sessionId: 'bb', sinceSeq: cursor1 + 100000 });
+
+  return {
+    ok:
+      first.blackboardMode === 'initial' &&
+      first.blackboard.length === 40 &&
+      first.blackboardTruncated === true &&
+      first.blackboardSummary.total === 60 &&
+      first.blackboardSummary.older === 20 &&
+      (first.blackboardSummary.byKind?.task_claimed ?? 0) > 0 &&
+      second.blackboardMode === 'incremental' &&
+      second.blackboard.length === 0 &&
+      third.blackboardMode === 'incremental' &&
+      third.blackboard.length === 3 &&
+      third.blackboardCursor === cursor1 + 3 &&
+      fallback.blackboardMode === 'fallback' &&
+      fallback.blackboard.length === 40,
+    detail: {
+      first: { mode: first.blackboardMode, rows: first.blackboard.length, total: first.blackboardSummary.total, older: first.blackboardSummary.older },
+      second: { mode: second.blackboardMode, rows: second.blackboard.length },
+      third: { mode: third.blackboardMode, rows: third.blackboard.length, cursor: third.blackboardCursor },
+      fallback: { mode: fallback.blackboardMode, rows: fallback.blackboard.length },
+      byKind: first.blackboardSummary.byKind,
+      failed: first.blackboardSummary.failedDecisions.length,
+    },
+  };
+});
+
+check('capability: prompt 用能力包/任务上下文，不再有固定"职责"分工；缺省兜底', async () => {
+  const { buildWorkerPrompt } = await import(pathToFileURL(path.join(root, 'lib', 'native', 'worker.js')).href);
+  const withCaps = buildWorkerPrompt({
+    role: 'CODE',
+    instanceId: 'role-code-01',
+    capability: '把 build 阶段做完并留下自测证据',
+    contextPack: ['仓库在 F:/x', '只改 src/**'],
+  });
+  const fallback = buildWorkerPrompt({ role: 'CODE', instanceId: 'role-code-02' });
+  return {
+    ok:
+      withCaps.includes('## 能力包') &&
+      withCaps.includes('## 任务上下文') &&
+      withCaps.includes('把 build 阶段做完') &&
+      withCaps.includes('只改 src/**') &&
+      !withCaps.includes('职责：') &&
+      !fallback.includes('职责：') &&
+      fallback.includes('兜底') &&
+      fallback.includes('## 允许的工具'),
+    detail: {
+      capsHasSection: withCaps.includes('## 能力包'),
+      noFixedDuty: !withCaps.includes('职责：'),
+      fallback: fallback.includes('兜底'),
+    },
+  };
+});
+
+check('ui(client): 黑板增量合并与摘要标记存在（静态）', () => {
+  const clientPath = path.resolve(root, '..', 'dsh-l0-control-ui', 'client.js');
+  if (!fs.existsSync(clientPath)) return { ok: false, detail: 'client.js 不可读' };
+  const source = fs.readFileSync(clientPath, 'utf8');
+  return {
+    ok:
+      source.includes('cursorRef') &&
+      source.includes("params.set('sinceSeq'") &&
+      source.includes('blackboardMode') &&
+      source.includes('blackboardSummary') &&
+      source.includes("mode !== 'incremental'"),
+    detail: {
+      cursorRef: source.includes('cursorRef'),
+      sinceSeq: source.includes("params.set('sinceSeq'"),
+      mode: source.includes('blackboardMode'),
+      summary: source.includes('blackboardSummary'),
+    },
+  };
+});
+
 check('pool: A/B 两工作区独立 journal / counts 不串 / 不抢锁 / registry reload 恢复', async () => {
   const { ServicePool } = await import(pathToFileURL(path.join(root, 'lib', 'workspaces', 'pool.js')).href);
   const { L0ControlService } = await import(pathToFileURL(path.join(root, 'lib', 'service.js')).href);
@@ -582,16 +764,24 @@ check('pool: A/B 两工作区独立 journal / counts 不串 / 不抢锁 / regist
   const dirsOk = a.stateDir === path.resolve(primary, cfg.stateDir) && b.stateDir === path.resolve(other, '.l0-control');
   const pathsDiffer = a.journalPath !== b.journalPath;
 
-  const wishA = await a.wishSubmit({ text: 'A 的愿望' });
-  const wishB = await b.wishSubmit({ text: 'B 的愿望' });
+  // 组成因子：两工作区各自 commit 一份最小 GraphSpec（不再有固定 6 节点）
+  const twoNodeSpec = (wish) => ({
+    wish,
+    nodes: [
+      { nodeId: 'N-ONE', title: 'one', stage: 'research', deps: [], acceptance: { kind: 'exists' } },
+      { nodeId: 'N-TWO', title: 'two', stage: 'build', deps: ['N-ONE'], acceptance: { kind: 'exists' } },
+    ],
+  });
+  const wishA = await a.graphCommit(twoNodeSpec('A 的愿望'));
+  const wishB = await b.graphCommit(twoNodeSpec('B 的愿望'));
   const statusA = await a.graphStatus();
   const statusB = await b.graphStatus();
   const countsA = statusA?.graph?.result?.counts ?? statusA?.graph?.counts ?? null;
   const countsB = statusB?.graph?.result?.counts ?? statusB?.graph?.counts ?? null;
 
   const [claimA, claimB] = await Promise.all([
-    a.taskClaim({ nodeId: 'NODE-RESEARCH', role: 'CODE', instanceId: 'role-code-01' }),
-    b.taskClaim({ nodeId: 'NODE-RESEARCH', role: 'CODE', instanceId: 'role-code-02' }),
+    a.taskClaim({ nodeId: 'N-ONE', role: 'CODE', instanceId: 'role-code-01' }),
+    b.taskClaim({ nodeId: 'N-ONE', role: 'CODE', instanceId: 'role-code-02' }),
   ]);
 
   const poolForOther = new ServicePool({
@@ -626,8 +816,8 @@ check('pool: A/B 两工作区独立 journal / counts 不串 / 不抢锁 / regist
       isolationOk &&
       fs.existsSync(a.journalPath) &&
       fs.existsSync(b.journalPath) &&
-      (countsA?.nodes ?? 0) === 6 &&
-      (countsB?.nodes ?? 0) === 6 &&
+      (countsA?.nodes ?? 0) === 2 &&
+      (countsB?.nodes ?? 0) === 2 &&
       claimA?.ok === true &&
       claimB?.ok === true &&
       resolved === path.resolve(other) &&

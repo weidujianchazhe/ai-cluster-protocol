@@ -43,6 +43,9 @@ const ACTION_BY_TOOL: Record<string, string> = {
   board_task_create: 'task.submit',
   board_task_update: 'task.submit',
   project_init: 'project.init',
+  graph_plan: 'graph.read',
+  graph_commit: 'graph.write',
+  memory_load: 'memory.load',
 };
 
 function actorOf(exec: any, args: any, tenant: string) {
@@ -78,6 +81,8 @@ export function apply(ctx: any, rawConfig: unknown = {}) {
     primaryStateDir: config.stateDir,
   });
   pool.adopt(service);
+  // 只对“已启用本插件”的会话，在 Agent pre-step 裁剪到最近 N 个用户轮次；关闭时原样放行。
+  service.installContextGuard?.();
 
   // 每实例的同名工具（懒建 + 缓存），执行时按会话工作目录路由
   const instanceTools = new Map<string, Map<string, any>>();
@@ -189,8 +194,8 @@ export function apply(ctx: any, rawConfig: unknown = {}) {
   startUiServer({
     host: config.uiHost,
     port: Number(config.uiPort ?? 47831),
-    getSnapshot: (sessionId?: string, workspaceRoot?: string) =>
-      pool.get(workspaceRoot ?? service.workspaceRoot).uiSnapshot({ sessionId }),
+    getSnapshot: (sessionId?: string, workspaceRoot?: string, sinceSeq?: number) =>
+      pool.get(workspaceRoot ?? service.workspaceRoot).uiSnapshot({ sessionId, sinceSeq }),
     getWorkspaces: () => pool.list(),
     getAccess: (sessionId?: string, workspaceRoot?: string) =>
       pool.get(workspaceRoot ?? service.workspaceRoot).accessFor(sessionId),

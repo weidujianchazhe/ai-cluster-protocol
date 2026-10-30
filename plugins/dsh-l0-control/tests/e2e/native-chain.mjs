@@ -67,11 +67,29 @@ async function main() {
     if (gateApi) add('C0', 'pass_gate 已暴露', true, gateApi);
     else skip('C0', 'pass_gate 未暴露（N2 桥接中）', '阶段闸门无法推进；不伪造 gate 通过');
 
-    // ── 1) wish_submit
+    // ── 1) wish_submit（只记愿望）+ graph_commit（本测试自己给的 6 节点 spec，不是生产模板）
     const wish = await svc.wishSubmit({ text: 'N5 native chain: 记账 CRUD' });
     const wr = wish?.result ?? {};
-    const nodeIds = wr.nodes ?? [];
-    add('C1', 'wish_submit 建图', wish?.ok === true && nodeIds.length === 6, `nodes=${nodeIds.length} ready=${JSON.stringify(wr.ready ?? [])}`);
+    const spec = {
+      wish: 'N5 native chain: 记账 CRUD',
+      nodes: [
+        { nodeId: 'NODE-RESEARCH', title: '调研', stage: 'research', capability: 'RESEARCH', deps: [], acceptance: { kind: 'exists' } },
+        { nodeId: 'NODE-PRD', title: 'PRD', stage: 'design', capability: 'DESIGN', deps: ['NODE-RESEARCH'], acceptance: { kind: 'exists' } },
+        { nodeId: 'NODE-CONTRACT', title: '契约', stage: 'design', capability: 'DESIGN', deps: ['NODE-PRD'], acceptance: { kind: 'exists' } },
+        { nodeId: 'NODE-BUILD', title: '实现', stage: 'build', capability: 'CODE', deps: ['NODE-CONTRACT'], acceptance: { kind: 'exists' } },
+        { nodeId: 'NODE-AUDIT', title: '审计', stage: 'audit', capability: 'AUDIT', deps: ['NODE-BUILD'], acceptance: { kind: 'exists' } },
+        { nodeId: 'NODE-DELIVER', title: '交付', stage: 'deliver', capability: 'OPS', deps: ['NODE-AUDIT'], acceptance: { kind: 'exists' } },
+      ],
+    };
+    const committed = await svc.graphCommit(spec);
+    const cr = committed?.result ?? {};
+    const nodeIds = cr.order ?? [];
+    add(
+      'C1',
+      'wish_submit 只记愿望（graph-plan-required）+ graph_commit 落 6 节点',
+      wish?.ok === true && wr.graphPlanRequired === true && committed?.ok === true && nodeIds.length === 6,
+      `planRequired=${wr.graphPlanRequired === true} committed=${committed?.ok === true} nodes=${nodeIds.length} ready=${JSON.stringify(cr.ready ?? [])}`,
+    );
 
     // 读图拿节点元信息（stage / capability / evidence_required）
     const graph = (await svc.graphStatus())?.graph?.result?.graph ?? {};

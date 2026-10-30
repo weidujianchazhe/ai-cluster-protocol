@@ -11,8 +11,8 @@ import http from 'node:http';
                                   
                 
                 
-                                                                                    
-                                                                                          
+                                                                                                            
+                                                                                                             
                                                        
                                                    
                                     
@@ -76,15 +76,19 @@ export async function startUiServer(options                 )                   
     const path = rawUrl.split('?')[0];
     let sessionId                    ;
     let workspaceRoot                    ;
+    let sinceSeq                    ;
     try {
       const query = new URLSearchParams(rawUrl.split('?')[1] ?? '');
       const value = query.get('sessionId');
       if (value && String(value).trim()) sessionId = String(value).trim();
       const ws = query.get('workspaceRoot');
       if (ws && String(ws).trim()) workspaceRoot = String(ws).trim();
+      const since = query.get('sinceSeq');
+      if (since && Number.isFinite(Number(since))) sinceSeq = Math.max(0, Math.floor(Number(since)));
     } catch {
       sessionId = undefined;
       workspaceRoot = undefined;
+      sinceSeq = undefined;
     }
     if (method === 'OPTIONS') {
       res.writeHead(204, {
@@ -214,7 +218,7 @@ export async function startUiServer(options                 )                   
       return;
     }
     try {
-      const snapshot = await options.getSnapshot(sessionId, workspaceRoot);
+      const snapshot = await options.getSnapshot(sessionId, workspaceRoot, sinceSeq);
       send(res, 200, path === '/ui/health' ? { ok: true, at: new Date().toISOString() } : snapshot);
     } catch (error) {
       send(res, 500, { ok: false, error: 'snapshot-failed', message: String((error         )?.message ?? error) });

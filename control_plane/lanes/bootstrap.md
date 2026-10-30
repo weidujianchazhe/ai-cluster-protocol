@@ -557,3 +557,128 @@ GET /ui/snapshot?workspaceRoot=…\projects\multi-ws-demo&sessionId=<me>
 registry 里可能留下已删除目录的条目（列表会显示 events=0，不报错）。
 
 **预算**：R9（task-39 单列预算 10，本文件累计记录）。
+
+---
+
+## R10（task-40）· 黑板增量 + 能力包上下文 + 容量/摘要 · 2026-10-30
+
+### ① 黑板增量（cursor）
+
+`uiSnapshot({sessionId, sinceSeq?})`：
+
+| 情形 | 行为 |
+|---|---|
+| 无 `sinceSeq` | `blackboardMode='initial'`，最近 **40** 条（倒序），`blackboardTruncated = total>40` |
+| `sinceSeq ≤ total` | `'incremental'`，只回 `sinceSeq` 之后的新行（最多 40，超出标 truncated），`blackboardCursor = 当前 journal 行数` |
+| `sinceSeq > total`（超界/回退） | `'fallback'`，回退最近 40 条 + `truncated` |
+
+- 新增返回：`blackboardCursor` / `blackboardTruncated` / `blackboardMode` / `sinceSeq` / `blackboardSummary`；
+- `ui-server` 解析 `?sinceSeq=`（非数字忽略）并透传；
+- UI：`cursorRef` 保存 cursor，10s 轮询带 `sinceSeq`；`mode === 'incremental'` 时把新行**合并**到已有黑板
+  （按 `at|kind|nodeId|text` 去重、最多 40），其余模式直接替换。
+
+### ② 能力包上下文（worker prompt）
+
+- `WorkerPromptInput` 新增 `capability?: string` 与 `contextPack?: string[]`；
+- prompt 结构改为：**身份** → `role` 只作"实例寻址/工具白名单/审计独立性"说明（明确**不是固定专家分工**）
+  → `## 能力包` → `## 任务上下文` → 工具白名单 → 循环契约；
+- 只有**没给能力包**时才用 role profile 的 `mission` 兜底（文本带"兜底"字样）；
+- `agent_spawn` 工具/schema 新增 `capability`、`contextPack`（也接受 `cwd`）；`service.spawnAgent` 顶层或 `worker`
+  子对象都可传；`workerSummary` 增加 `capability` / `contextPackSize`。
+
+### ④ 容量 + 摘要
+
+黑板**最多 40 条**；新增 `blackboardSummary`：
+`{ total, shown, older, byKind, failedDecisions(最近 5), cursor }`，UI 黑板 tab 顶层显示
+「总事件 / 已显示 / 更早 / 模式 / 最近失败数」，不再拉全量历史。
+
+### 测试（selftest 29 → 32）
+
+| 用例 | 断言 |
+|---|---|
+| blackboard | 60 条事件 → initial 40 条、`older=20`、`byKind.task_claimed>0`；`sinceSeq=cursor` → incremental 0 条；追加 3 条后 → incremental 3 条且 cursor+3；`sinceSeq=cursor+100000` → **fallback** 40 条 |
+| capability | prompt 含 `## 能力包`/`## 任务上下文`/能力文本/上下文行；**不含 `职责：`**；缺省时含"兜底"与工具白名单 |
+| UI（静态） | client.js 含 `cursorRef`、`sinceSeq` 参数、`blackboardMode`、`blackboardSummary`、`mode !== 'incremental'` 合并分支 |
+
+### 真宿主 /ui/snapshot
+
+```
+initial        → mode=initial     rows=40 cursor=257 truncated=true  summary{total:257,shown:40,older:217,failed:1}
+sinceSeq=257   → mode=incremental rows=0  cursor=257 truncated=false
+sinceSeq=+99999→ mode=fallback    rows=40
+```
+
+### 数字
+
+| 门禁 | 结果 |
+|---|---|
+| `selftest` | **32 / 32** |
+| `contract` | **20 / 0** |
+| `bootstrap-check` | 15 / 15 |
+| `conformance` | 7 / 7 |
+| `persistence-check` | 10 / 10 |
+
+**边界**：cursor 是"journal 行数"，换 stateDir / journal 被截断时会走 fallback（安全但会重取 40 条）；
+摘要只统计 `kind` 与最近 5 条失败，不做全量聚合。
+
+**预算**：R10（task-40 单列预算 6，本文件累计记录）。
+
+---
+
+## R11（task-41）· 工作图组成因子（不做固定架构）· 2026-10-30
+
+规格：`control_plane/GRAPH-工作图组成因子.md`。
+
+### ① 组成因子（`src/core/graphspec.ts` 新）
+
+- **NodeSpec**：`nodeId / title / spec? / capability?（自由标签）/ stage?（阶段不是岗位）/
+  deps? / evidenceRequired? / verifierIds? / acceptance? / budget? / writeScopes? / contextRefs? / risk?`
+- **GraphSpec**：`{version, wish, nodes[], policies{maxParallel,maxDepth,budgetTokens}, notes[]}`
+- `planGraph(spec)`：**纯校验、零写入** → `{ok, planId, errors[], warnings[], ready[], order[], counts, spec}`
+  校验项：ID 唯一、deps 存在、无环（DFS）、stage 合法、每节点可验收（acceptance 或 evidence+verifier）、预算合法；
+  `order` 是拓扑序（commit 按它 addNode）；`ready` 是无依赖节点。
+- `commitGraph(store, spec)`：校验不过 → **零写入**；通过 → 单事务 addNode（拓扑序）+ `wish_submitted`/`graph_created`；
+  **幂等**：spec 里全部 nodeId 已存在 → `idempotent:true` 不重复写；部分存在 → `partial-existing` 拒绝半途落图。
+
+### ② 工具与大模型指令
+
+- 新工具 `graph_plan`（`graph.read`）、`graph_commit`（`graph.write`）；工具面 15 → **17**；
+- `wish_submit` **不再自动建图**：只写 journal + 返回 `graphPlanRequired:true`、`template`（单节点样例）、
+  `instructions`（5 条建图步骤）与现有 graph 现状；
+- `WISH_PLAN` 从生产路径移除（`submitWishImpl` 不再使用），仍从 core 导出供 demo/兼容测试；
+- README 工具面更新为 17，新增「建图：只有组成因子，没有固定流水线」一节。
+
+### ③ 测试（selftest 32 → 33 + 3 个 e2e 改造）
+
+| 用例 | 断言 |
+|---|---|
+| `graphspec`（新） | plan 前 nodes=0；菱形 DAG（A→B/C→D）plan `ok/ready=[A]/counts{4,4}` 且**plan 后 nodes 仍 0**；commit 后 nodes=4；再次 commit `idempotent:true` 且 nodes 不变；环/未知 dep/无验收/重复 ID 四类 → `errors` 命中对应 code 且**零写入**；`wish_submit` 返回 `graphPlanRequired` 且 nodes 数不变 |
+| `tests/e2e/native-chain.mjs` | C1 改为"wish_submit 只记愿望 + graph_commit 落 6 节点"，全链仍 6/6 |
+| `tests/e2e/oracle-diff.mjs` | 显式 2 节点 spec，diff=0 保持 |
+| `tests/e2e/run.mjs` | N2 改为 wish_submit(graph-plan-required) + graph_commit 6 节点 |
+| `scripts/persistence-check.mjs` | 6 节点链改用 `graphCommit(CHAIN_SPEC)`，10/10 保持 |
+
+### 真宿主
+
+```
+wish_submit → {ok:true, graphPlanRequired:true, nodes:[], template, instructions[5]}
+graph_plan（4 节点分支+汇合）→ {ok:true, planId:'PLAN-…', ready:['P-SCAN'], order:[P-SCAN,P-FIX-A,P-FIX-B,P-MERGE],
+                              counts:{nodes:4,edges:4}, dryRun:true}   ← 落盘 appended=0
+graph_status → counts 仍是原来的 6/5/6/0（plan 零写入）；capabilities.toolCount=17
+```
+
+### 数字
+
+| 门禁 | 结果 |
+|---|---|
+| `selftest` | **33 / 33** |
+| `contract` | **20 / 0** |
+| `bootstrap-check` | 15 / 15 |
+| `conformance` | **7 / 7**（native:branch / native:chain / oracle:diff / e2e×2 / g5:real 全 PASS） |
+| `persistence-check` | 10 / 10 |
+| autonomy（历史 6 节点记录） | 7 / 7 |
+
+**边界**：`graph_plan` 也写一行 `graph_plan_preview` 审计（不是图写入，属 journal 审计）；`commit` 目前不允许"增量追加节点"
+（要么整图新提交、要么同图幂等）；UI 尚未做 plan 预览面板（规格标注为可选）。
+
+**预算**：R11（task-41 单列预算 8，本文件累计记录）。

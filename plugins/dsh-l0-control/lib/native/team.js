@@ -285,7 +285,7 @@ export class NativeTeam {
     }
   }
 
-  /** worker 模式下拼 prompt（角色 + 白名单 + 循环契约 + 协调者上下文）；否则原样。 */
+  /** worker 模式下拼 prompt（能力包 + 白名单 + 循环契约 + 协调者上下文）；否则原样。 */
           promptText(input                 , role        , instanceId        )         {
     const worker = input?.worker;
     if (!worker || worker.enabled === false) return String(input.task);
@@ -296,6 +296,8 @@ export class NativeTeam {
       maxIterations: worker.maxIterations,
       peers: worker.peers,
       auditPartner: worker.auditPartner,
+      capability: worker.capability,
+      contextPack: worker.contextPack,
     });
     return `${base}\n\n## 协调者给的本轮上下文\n${String(input.task)}`;
   }
@@ -306,6 +308,8 @@ export class NativeTeam {
     return {
       role,
       instanceId,
+      capability: String(worker.capability ?? '').trim() || null,
+      contextPackSize: (worker.contextPack ?? []).length,
       tools: profileFor(role).tools,
       iterations: Number(worker.maxIterations ?? 8),
     };

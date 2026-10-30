@@ -795,18 +795,35 @@ async function runNative() {
       inner?.ok === true && inner?.result?.ok === true,
       inner?.ok === true ? `version=${inner.result.version} nodes=${inner.result.counts?.nodes} journalSeq=${inner.result.journal?.lastSeq}` : `error=${inner?.error}`);
 
-    // ② wish_submit（N3-R4 已绿）
+    // ② wish_submit（只记愿望）+ graph_commit（本测试显式给 spec；生产路径无固定模板）
     let wish = null;
     try { wish = await svc.wishSubmit({ text: 'N5 native: 记账 CRUD 端到端' }); } catch (err) { wish = { ok: false, error: 'threw' }; }
     const wr = wish?.result ?? {};
-    const nodeIds = wr.nodes ?? [];
-    const ready = wr.ready ?? [];
-    if (wish?.ok === true) {
-      add('N2', 'wish_submit 建图（6 节点 / ready=NODE-RESEARCH）',
-        nodeIds.length === 6 && ready.includes('NODE-RESEARCH'),
-        `nodes=${nodeIds.length} ready=${JSON.stringify(ready)} version=${wr.version}`);
+    let committed = null;
+    try {
+      committed = await svc.graphCommit({
+        wish: 'N5 native: 记账 CRUD 端到端',
+        nodes: [
+          { nodeId: 'NODE-RESEARCH', title: '调研', stage: 'research', capability: 'RESEARCH', deps: [], acceptance: { kind: 'exists' } },
+          { nodeId: 'NODE-PRD', title: 'PRD', stage: 'design', capability: 'DESIGN', deps: ['NODE-RESEARCH'], acceptance: { kind: 'exists' } },
+          { nodeId: 'NODE-CONTRACT', title: '契约', stage: 'design', capability: 'DESIGN', deps: ['NODE-PRD'], acceptance: { kind: 'exists' } },
+          { nodeId: 'NODE-BUILD', title: '实现', stage: 'build', capability: 'CODE', deps: ['NODE-CONTRACT'], acceptance: { kind: 'exists' } },
+          { nodeId: 'NODE-AUDIT', title: '审计', stage: 'audit', capability: 'AUDIT', deps: ['NODE-BUILD'], acceptance: { kind: 'exists' } },
+          { nodeId: 'NODE-DELIVER', title: '交付', stage: 'deliver', capability: 'OPS', deps: ['NODE-AUDIT'], acceptance: { kind: 'exists' } },
+        ],
+      });
+    } catch (err) {
+      committed = { ok: false, error: 'threw' };
+    }
+    const cr = committed?.result ?? {};
+    const nodeIds = cr.order ?? [];
+    const ready = cr.ready ?? [];
+    if (wish?.ok === true && committed?.ok === true) {
+      add('N2', 'wish_submit 只记愿望 + graph_commit 落 6 节点（ready=NODE-RESEARCH）',
+        wr.graphPlanRequired === true && nodeIds.length === 6 && ready.includes('NODE-RESEARCH'),
+        `planRequired=${wr.graphPlanRequired === true} nodes=${nodeIds.length} ready=${JSON.stringify(ready)}`);
     } else {
-      unknown('N2', 'wish_submit 建图', `error=${wish?.error}`);
+      unknown('N2', 'wish_submit + graph_commit 建图', `error=${committed?.error ?? wish?.error}`);
     }
 
     // ③ task_next

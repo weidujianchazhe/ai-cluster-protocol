@@ -63,5 +63,9 @@
   "created": "Created",
   "actions": "actions",
   "conflicts": "conflicts",
-  "targetWorkspace": "Target workspace:"
+  "targetWorkspace": "Target workspace:",
+  "bbTotal": "total",
+  "bbShown": "shown",
+  "bbOlder": "older",
+  "bbFailed": "recent failures"
 }

@@ -108,19 +108,35 @@ export class ServicePool {
   /** 该工作区应使用的 stateDir（主工作区沿用旧目录，其他 `.l0-control`）。 */
   stateDirFor(workspaceRoot: string): string {
     const root = path.resolve(workspaceRoot);
-    if (root === this.primaryRoot) return this.primaryStateDir;
+    if (this.sameRoot(root, this.primaryRoot)) return this.primaryStateDir;
     const registered = this.registry.get(root);
     if (registered?.stateDir) return registered.stateDir;
     return path.join(root, '.l0-control');
   }
 
+  /** 同一工作区的路径大小写/尾斜杠归一（Windows）。 */
+  private sameRoot(a: string, b: string): boolean {
+    const norm = (p: string) => {
+      const r = path.resolve(p);
+      return process.platform === 'win32' ? r.toLowerCase() : r;
+    };
+    return norm(a) === norm(b);
+  }
+
+  private findService(workspaceRoot: string): any | null {
+    for (const [key, service] of this.services) {
+      if (this.sameRoot(key, workspaceRoot)) return service;
+    }
+    return null;
+  }
+
   /** 懒建实例；同一 workspaceRoot 只建一次。 */
   get(workspaceRoot?: string | null): any {
     const root = path.resolve(String(workspaceRoot ?? this.primaryRoot));
-    const cached = this.services.get(root);
+    const cached = this.findService(root);
     if (cached) return cached;
     const stateDir = this.stateDirFor(root);
-    const relativeStateDir = root === this.primaryRoot ? this.config.stateDir : path.relative(root, stateDir) || '.l0-control';
+    const relativeStateDir = this.sameRoot(root, this.primaryRoot) ? this.config.stateDir : path.relative(root, stateDir) || '.l0-control';
     const service = this.createService(
       this.ctx,
       { ...this.config, workspaceRoot: root, stateDir: relativeStateDir },
@@ -135,7 +151,7 @@ export class ServicePool {
 
   /** 已建实例（不触发懒建），用于 /ui/workspaces 的轻量列举。 */
   peek(workspaceRoot: string): any | null {
-    return this.services.get(path.resolve(String(workspaceRoot))) ?? null;
+    return this.findService(path.resolve(String(workspaceRoot)));
   }
 
   /** 认领一个已建实例（主实例不重复构造）。 */
@@ -155,7 +171,7 @@ export class ServicePool {
     for (const root of [...roots].sort()) {
       const entry = this.registry.get(root);
       const stateDir = this.stateDirFor(root);
-      const service = this.services.get(root) ?? null;
+      const service = this.findService(root);
       const journalPath = service?.journalPath ?? path.join(stateDir, this.config.journalFile);
       let journalEvents: number | null = null;
       try {

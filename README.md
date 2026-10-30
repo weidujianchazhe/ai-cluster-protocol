@@ -25,7 +25,7 @@
 ## 仓库结构
 
 ```text
-plugins/dsh-l0-control/      控制面 Host 插件（15 工具 + core/state/native/security/observability/a2a/bootstrap）
+plugins/dsh-l0-control/      控制面 Host 插件（18 工具 + core/state/native/security/observability/a2a/bootstrap + 记忆优先）
 plugins/dsh-l0-control-ui/   侧边栏 + 主面板（AI集群工作协议）
 control_plane/               Python 行为 oracle 与验收资料（不随插件运行时加载）
 ```

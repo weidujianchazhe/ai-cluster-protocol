@@ -23,6 +23,7 @@ import {
 import { coreIo } from "./io.ts";
 import { ALIASES, AliasError, pickAlias, pickNumber, pickString } from "./alias.ts";
 import { foldEvents, rehydrate, restoreFromEvents } from "./fold.ts";
+import { commitGraph, graphSpecTemplate, planGraph } from "./graphspec.ts";
 import type { Lease } from "./types.ts";
 
 let sharedStore: Store | null = null;
@@ -177,21 +178,16 @@ export const WISH_PLAN: ReadonlyArray<{
   { nodeId: "NODE-DELIVER", title: "交付打包", capability: "OPS", stage: "deliver", deps: ["NODE-AUDIT"] },
 ];
 
-/** 愿望 → 工作图（单事务；失败整体回滚）。 */
+/**
+ * 愿望 → 工作图（**只记录愿望，不再生成固定 6 节点**）。
+ *
+ * 组成因子原则：具体节点/依赖由 AI 用 `graph_plan` → `graph_commit` 决定。
+ * `WISH_PLAN` 仅保留给 demo / 兼容测试，生产路径不再使用。
+ */
 function submitWishImpl(input: WishInput): Record<string, unknown> {
-  const text = String(input?.text ?? "").trim();
+  const text = String(input?.text ?? '').trim();
   if (!text) return { ok: false, error: "wish-text-required" };
   const store = coreStore();
-
-  const existing = WISH_PLAN.filter((spec) => getNode(store, spec.nodeId)).map((s) => s.nodeId);
-  if (existing.length) {
-    return {
-      ok: false,
-      error: "wish-already-submitted",
-      existing,
-      hint: "同一进程只生成一份确定性最小图；要再规划请改用 replan",
-    };
-  }
 
   const maxParallel = input.maxParallel === undefined ? 2 : Number(input.maxParallel);
   const budgetTokens = input.budgetTokens === undefined ? 0 : Number(input.budgetTokens);
@@ -204,42 +200,33 @@ function submitWishImpl(input: WishInput): Record<string, unknown> {
       store.state.meta.set("wish_max_parallel", String(maxParallel));
       store.state.meta.set("wish_budget_tokens", String(budgetTokens));
       store.journal.append("wish_submitted", null, { wish_id: wishId, text, maxParallel, budgetTokens });
-      for (const spec of WISH_PLAN) {
-        addNode(store, {
-          nodeId: spec.nodeId,
-          title: spec.title,
-          spec: `${spec.title}（愿望：${text}）`,
-          capability: spec.capability,
-          stage: spec.stage,
-          deps: spec.deps,
-          evidenceRequired: ["artifact"],
-          verifierIds: ["verifier-ci"],
-          budget: { maxTokens: budgetTokens, maxParallel },
-        });
-      }
-      store.journal.append("graph_created", null, {
-        wish_id: wishId,
-        nodes: WISH_PLAN.map((s) => s.nodeId),
-      });
     });
   } catch (error) {
     return {
       ok: false,
-      error: (error as { code?: string }).code ?? "graph-creation-failed",
+      error: (error as { code?: string }).code ?? "wish-record-failed",
       message: (error as Error).message,
     };
   }
 
-  const promoted = bootstrap(store);
   return {
     ok: true,
     wishId,
     text,
     maxParallel,
     budgetTokens,
-    nodes: WISH_PLAN.map((s) => s.nodeId),
-    ready: promoted.length ? promoted : readySet(store),
-    version: Number(store.state.meta.get("graph_version") ?? "1"),
+    /** 生产路径不再自动建图：先 graph_plan 预览，再 graph_commit 落图 */
+    graphPlanRequired: true,
+    nodes: [],
+    ready: readySet(store),
+    template: graphSpecTemplate(text),
+    instructions: [
+      "1. 分析需求、约束、风险、可并行点；节点数量由工作决定，不由团队规模决定。",
+      "2. 只用 Node 因子（nodeId/title/spec/capability/stage/deps/evidenceRequired/verifierIds/acceptance/budget）。",
+      "3. 每个节点必须可验收（acceptance，或 evidenceRequired + verifierIds）；没有验收的节点不许落图。",
+      "4. 先 graph_plan 预览（零写入），确认 errors/warnings/ready 后再 graph_commit。",
+      "5. 强依赖必须显式写 deps；能并行的才并行。不套固定流水线。",
+    ],
     graph: { nodes: listNodes(store).map(briefNode), edges: edges(store) },
   };
 }
@@ -671,6 +658,19 @@ export function tickDecisions(options: { now?: number } = {}): Record<string, un
     status: d.status,
     chosen_option_id: d.chosen_option_id,
   })) };
+}
+
+/** 工作图组成因子：`graph_plan` —— 纯校验 + 预览，**零写入**。 */
+export function graphPlan(spec: unknown): Record<string, unknown> {
+  const plan = planGraph(spec as never);
+  return { ...plan, dryRun: true };
+}
+
+/** 工作图组成因子：`graph_commit` —— 校验通过后落图；同一份图重复提交幂等。 */
+export function graphCommit(spec: unknown): Record<string, unknown> {
+  const store = coreStore();
+  const result = commitGraph(store, spec as never);
+  return { ...result };
 }
 
 /** 节点上尚未落地的闸门决策（信息性；不参与 core 的 done 判定）。 */

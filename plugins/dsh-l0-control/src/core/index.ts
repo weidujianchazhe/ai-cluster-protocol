@@ -8,6 +8,7 @@
  *   evidence（产物/证据 append-only + 凭证铸造所需的 pass 证据）
  *   graph（唯一状态入口、终态/白名单/凭证、环检测、快照与重放）
  *   ready / leases / decisions / replan（R2–R5 逐步补齐）
+ *   graphspec（工作图组成因子：GraphSpec/NodeSpec + plan/commit）
  *
  * 约束：本目录不含 I/O、不读 DSH 服务、不落盘——持久化与原生适配分别归 N4 / N2。
  */
@@ -77,7 +78,7 @@ export {
 } from "./leases.ts";
 export type { ClaimOptions, RenewOptions, TakeoverOptions } from "./leases.ts";
 
-// ── N2 `service.ts` 约定的 8 个门面动作（R4 起全部落地，pending=[]）──
+// ── N2 `service.ts` 约定的门面动作（R4 起全部落地，pending=[]）──
 export {
   WISH_PLAN,
   claimTask,
@@ -86,6 +87,8 @@ export {
   coreStore,
   decide,
   exportProjection,
+  graphCommit,
+  graphPlan,
   graphStatus,
   nextTask,
   nodeGates,
@@ -146,3 +149,7 @@ export type { SetGateOptions } from "./stages.ts";
 
 // ── journal → state 折叠（journal 权威，state 只是物化视图）─────────────
 export { foldEvents, rehydrate, restoreFromEvents } from "./fold.ts";
+
+// ── 工作图组成因子（不做固定架构）：GraphSpec/NodeSpec + plan/commit ─────
+export { commitGraph, graphSpecTemplate, planGraph } from "./graphspec.ts";
+export type { GraphCommitResult, GraphPlan, GraphSpec, NodeSpec, SpecIssue } from "./graphspec.ts";

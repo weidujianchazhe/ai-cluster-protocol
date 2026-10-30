@@ -63,5 +63,9 @@
   "created": "已创建",
   "actions": "动作",
   "conflicts": "冲突",
-  "targetWorkspace": "目标工作区："
+  "targetWorkspace": "目标工作区：",
+  "bbTotal": "总事件",
+  "bbShown": "已显示",
+  "bbOlder": "更早",
+  "bbFailed": "最近失败"
 }

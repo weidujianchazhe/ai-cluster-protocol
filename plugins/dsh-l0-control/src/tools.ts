@@ -39,7 +39,8 @@ export function buildTools(service: L0ControlService): ToolDefinition[] {
   return [
     {
       name: named('wish_submit'),
-      description: '提交一条愿望（自然语言目标）：落到 journal 并交给 core 生成工作图；maxParallel/budgetTokens 只是本次调用的覆盖值。',
+      description:
+        '记录一条愿望并返回 GraphSpec 模板 + 建图指令：**不会自动生成固定流水线**；下一步用 graph_plan 预览、graph_commit 落图。',
       parameters: {
         type: 'object',
         properties: {
@@ -52,6 +53,48 @@ export function buildTools(service: L0ControlService): ToolDefinition[] {
       },
       output,
       execute: (args) => service.wishSubmit(args),
+    },
+    {
+      name: named('graph_plan'),
+      description:
+        '工作图组成因子的**预览**：校验 GraphSpec（ID 唯一/依赖存在/无环/stage 合法/每节点可验收/预算合法）并返回 errors/warnings/ready/topology，**零写入**。不套固定模板。',
+      parameters: {
+        type: 'object',
+        properties: {
+          wish: { type: 'string', description: '原始需求（写进 meta）' },
+          nodes: {
+            type: 'array',
+            description: 'NodeSpec 数组：{nodeId,title,spec?,capability?,stage?,deps?,evidenceRequired?,verifierIds?,acceptance?,budget?}',
+            items: { type: 'object', additionalProperties: true },
+          },
+          policies: { type: 'object', additionalProperties: true, description: '{maxParallel,maxDepth,budgetTokens}' },
+          spec: { type: 'object', additionalProperties: true, description: '或直接给完整 GraphSpec（优先）' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.graphPlan(args ?? {}),
+    },
+    {
+      name: named('graph_commit'),
+      description:
+        '工作图组成因子的**落图**：先按 GraphSpec 校验，通过才写节点/依赖并计算 ready；同一份图重复提交返回 idempotent。校验失败零写入。',
+      parameters: {
+        type: 'object',
+        properties: {
+          wish: { type: 'string', description: '原始需求（写进 meta）' },
+          nodes: {
+            type: 'array',
+            description: 'NodeSpec 数组（同 graph_plan）',
+            items: { type: 'object', additionalProperties: true },
+          },
+          policies: { type: 'object', additionalProperties: true, description: '{maxParallel,maxDepth,budgetTokens}' },
+          spec: { type: 'object', additionalProperties: true, description: '或直接给完整 GraphSpec（优先）' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.graphCommit(args ?? {}),
     },
     {
       name: named('graph_status'),
@@ -164,6 +207,21 @@ export function buildTools(service: L0ControlService): ToolDefinition[] {
       execute: (args) => service.passGate(args ?? {}),
     },
     {
+      name: named('memory_load'),
+      description: '按需读取管理区/工程记忆：任务卡 + STATE + 一篇报告，返回紧凑文本和引用；不自动注入，不返回全量历史。',
+      parameters: {
+        type: 'object',
+        properties: {
+          taskCard: { type: 'string', description: '任务卡文件名（tasks/ 下；可省略 .md）' },
+          record: { type: 'string', description: '报告文件名（reports/ 下；可省略 .md）' },
+          maxChars: { type: 'number', description: '返回文本上限（1000–30000，默认 12000）' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.memoryLoad(args ?? {}),
+    },
+    {
       name: named('team_status'),
       description: '原生通道：读 agentTeams 团队成员板与任务板，并列出本插件派生的真实子 Agent 实例（caller 取 exec.agent，缺 caller fail-closed）。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
@@ -182,6 +240,13 @@ export function buildTools(service: L0ControlService): ToolDefinition[] {
           label: { type: 'string', description: '展示标签' },
           maxDepth: { type: 'number', description: '递归深度上限（缺省取 Config.nativeMaxDepth）' },
           agentPreset: { type: 'string', description: 'Agent 预设名' },
+          capability: { type: 'string', description: '能力包：本次任务需要的能力（替代固定"角色职责"；role 只是实例身份）' },
+          contextPack: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '任务上下文清单（每行一条事实/约束）',
+          },
+          cwd: { type: 'string', description: '子 Agent 工作目录（缺省 workspaceRoot）' },
         },
         required: ['role', 'task'],
         additionalProperties: false,

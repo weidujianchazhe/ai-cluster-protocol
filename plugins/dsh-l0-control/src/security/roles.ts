@@ -33,6 +33,7 @@ export const PERMISSIONS: Record<string, readonly Role[]> = {
   // 图 / 愿望
   "wish.create": ["ORCH", "HUMAN"],
   "graph.read": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
+  "memory.load": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
   "graph.write": ["ORCH", "HUMAN"],
   // Bootstrap（工程初始化）：人类/编排/插件自身可建目录骨架；不授予执行角色
   "project.init": ["ORCH", "HUMAN", "PLUGIN"],

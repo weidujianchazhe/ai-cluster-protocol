@@ -95,6 +95,14 @@ async function runTs() {
   const out = {};
   try {
     await svc.wishSubmit({ text: 'oracle diff' });
+    // 组成因子：本测试显式给 spec（生产路径不再有固定模板）
+    await svc.graphCommit({
+      wish: 'oracle diff',
+      nodes: [
+        { nodeId: 'NODE-RESEARCH', title: '调研', stage: 'research', capability: 'RESEARCH', deps: [], acceptance: { kind: 'exists' } },
+        { nodeId: 'NODE-BUILD', title: '实现', stage: 'build', capability: 'CODE', deps: ['NODE-RESEARCH'], acceptance: { kind: 'exists' } },
+      ],
+    });
     // ① done 拒绝：未提交证据 + 未过闸门
     const early = await svc.verifyDone({ nodeId: 'NODE-RESEARCH', producer_instance: 'ROLE-RESEARCH-01', producerInstance: 'ROLE-RESEARCH-01', auditor_instance: 'ROLE-AUDIT_CODE-01', auditorInstance: 'ROLE-AUDIT_CODE-01' });
     out.done_reject_without_evidence = early?.ok === false;

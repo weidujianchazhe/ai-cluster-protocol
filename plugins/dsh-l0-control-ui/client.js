@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
       loading: '加载中…',
       offline: 'UI 侧车未连接；请确认控制面插件已启用，或让 Agent 调 graph_status。',
       members: '团队成员',
-      subagents: '子 Agent（递归）',
+      subagents: '递归子 Agent 总数',
       activeSubagents: '活跃子 Agent',
       tasks: '共同任务',
       ready: '就绪节点',
@@ -48,6 +48,10 @@ window.__ModuleLoader__.load({
       copyPath: '复制路径',
       copied: '已复制',
       noMembers: '暂无成员数据',
+      activeTitle: '活跃子 Agent',
+      activeHint: '只显示当前 activity=running 的递归子 Agent；DSH 列表里的绿点是“可继续”，不等于运行中。',
+      activeEmpty: '当前没有运行中的子 Agent（历史子 Agent 仍保留在递归统计中）。',
+      readyHint: '图谱为空（0 nodes）：就绪节点=依赖已完成、可被 task_claim 的节点；先 wish_submit 生成工作图。',
       noTasks: '暂无任务',
       noEvents: '暂无事件',
       role: '角色',
@@ -88,7 +92,7 @@ window.__ModuleLoader__.load({
       loading: 'Loading…',
       offline: 'UI sidecar is not connected. Check the control plugin is enabled, or ask the Agent to call graph_status.',
       members: 'Members',
-      subagents: 'Subagents (recursive)',
+      subagents: 'Recursive subagent total',
       activeSubagents: 'Active subagents',
       tasks: 'Shared tasks',
       ready: 'Ready nodes',
@@ -116,6 +120,10 @@ window.__ModuleLoader__.load({
       copyPath: 'Copy path',
       copied: 'Copied',
       noMembers: 'No member data',
+      activeTitle: 'Active subagents',
+      activeHint: 'Only recursive subagents with activity=running; a green dot in the DSH list means resumable, not running.',
+      activeEmpty: 'No subagent is running right now (historical subagents remain in the recursive count).',
+      readyHint: 'Graph is empty (0 nodes): ready nodes are dependency-satisfied nodes claimable by task_claim; run wish_submit first.',
       noTasks: 'No tasks',
       noEvents: 'No events',
       role: 'Role',
@@ -284,6 +292,8 @@ window.__ModuleLoader__.load({
       const [projectId, setProjectId] = React.useState('code');
       const [pickedSession, setPickedSession] = React.useState(null);
       const [data, setData] = React.useState(null);
+      // 黑板增量 cursor（journal 行数）：初始 null → 首次取最近 40
+      const cursorRef = React.useRef(null);
       const [error, setError] = React.useState(null);
       const [loading, setLoading] = React.useState(true);
       const [copiedPath, setCopiedPath] = React.useState(null);
@@ -382,12 +392,29 @@ window.__ModuleLoader__.load({
           const params = new URLSearchParams();
           if (target) params.set('sessionId', target);
           if (boardWorkspacePath) params.set('workspaceRoot', boardWorkspacePath);
+          if (cursorRef.current !== null) params.set('sinceSeq', String(cursorRef.current));
           const url = params.toString() ? `${SNAPSHOT_URL}?${params.toString()}` : SNAPSHOT_URL;
           const res = await fetch(url, { headers: { accept: 'application/json' } });
           if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
           const json = await res.json();
           if (!json || json.ok !== true) throw new Error(json?.error || 'snapshot failed');
-          setData(json);
+          // 黑板增量合并：initial/fallback 直接替换；incremental 只把新行接到前面
+          const incoming = Array.isArray(json.blackboard) ? json.blackboard : [];
+          const mode = json.blackboardMode || (cursorRef.current === null ? 'initial' : 'incremental');
+          setData((prev) => {
+            if (!prev || mode !== 'incremental') return json;
+            const seen = new Set();
+            const merged = [];
+            for (const row of [...incoming, ...(prev.blackboard || [])]) {
+              const key = `${row?.at || ''}|${row?.kind || ''}|${row?.nodeId || ''}|${row?.text || ''}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              merged.push(row);
+              if (merged.length >= 40) break;
+            }
+            return { ...json, blackboard: merged };
+          });
+          if (typeof json.blackboardCursor === 'number') cursorRef.current = json.blackboardCursor;
           setError(null);
         } catch (e) {
           setError(String(e?.message || e));
@@ -407,6 +434,10 @@ window.__ModuleLoader__.load({
       const tasks = Array.isArray(team?.tasks) ? team.tasks : [];
       const ready = Array.isArray(data?.graph?.ready) ? data.graph.ready : [];
       const events = Array.isArray(data?.blackboard) ? data.blackboard : [];
+      const descendantItems = Array.isArray(data?.descendants?.items) ? data.descendants.items : [];
+      const activeDescendants = descendantItems.filter((item) => item?.activity === 'running');
+      const graphNodes = Number(data?.graph?.counts?.nodes ?? 0);
+      const graphEmpty = !data?.graph || graphNodes === 0;
 
       const copy = async (text, key) => {
         try {
@@ -476,8 +507,9 @@ window.__ModuleLoader__.load({
           h(Stat, { label: t('subagents'), value: loading ? '…' : (showData && descendantsSource !== 'none' ? (data?.descendants?.count ?? 0) : '—') }),
           h(Stat, { label: t('activeSubagents'), value: loading ? '…' : (showData && descendantsSource !== 'none' ? (data?.descendants?.active ?? 0) : '—') }),
           h(Stat, { label: t('tasks'), value: loading ? '…' : (showData ? tasks.length : '—') }),
-          h(Stat, { label: t('ready'), value: loading ? '…' : (showData ? ready.length : '—') }),
+          h(Stat, { label: t('ready'), value: loading ? '…' : (showData ? (graphEmpty ? '—' : ready.length) : '—') }),
           h(Stat, { label: t('events'), value: loading ? '…' : (showData ? (data?.journal?.events ?? events.length) : '—') })),
+        showData && graphEmpty ? h('div', { style: { ...muted, marginTop: -4, marginBottom: 8 } }, t('readyHint')) : null,
         coordinationEnabled && !sessionAttached ? h('div', { style: { ...muted, marginTop: -4, marginBottom: 8 } }, t('noSessionSnapshot')) : null,
 
         // 两块分开：左边事实源，右边插件开关（只控制协作）
@@ -516,6 +548,15 @@ window.__ModuleLoader__.load({
               h('div', null, h('div', { style: { fontWeight: 550 } }, fmt(m.name || m.id)), h('div', { style: { ...mono, ...muted } }, fmt(m.id || ''))),
               h('div', null, h('span', { style: pill }, fmt(m.role))),
               h('div', null, h('span', { style: pill }, fmt(m.status)))))) : null,
+          !showData ? null : h('div', { style: { marginTop: 16, borderTop: '1px solid var(--dsw-alias-border-l1)', paddingTop: 12 } },
+            h('h3', { style: { ...sectionTitle, fontSize: 14, margin: 0 } }, t('activeTitle')),
+            h('div', { style: { ...muted, margin: '4px 0 8px' } }, t('activeHint')),
+            activeDescendants.length === 0
+              ? h('div', { style: muted }, t('activeEmpty'))
+              : activeDescendants.map((item, index) => h('div', { key: item.id || index, style: { ...row, gridTemplateColumns: 'minmax(180px, 1.5fr) minmax(70px, .5fr) minmax(90px, .7fr)' } },
+                h('div', null, h('div', { style: { fontWeight: 550 } }, fmt(item.label || item.id)), h('div', { style: { ...mono, ...muted } }, fmt(item.id || ''))),
+                h('div', null, h('span', { style: pill }, `depth ${fmt(item.depth)}`)),
+                h('div', null, h('span', { style: pill }, fmt(item.activity)))))),
 
         tab === 'tasks' ? h('div', { style: card },
           h('h2', { style: sectionTitle }, t('tasksTitle')),
@@ -529,6 +570,13 @@ window.__ModuleLoader__.load({
         tab === 'board' ? h('div', { style: card },
           h('h2', { style: sectionTitle }, t('boardTitle')),
           h('div', { style: muted }, t('boardHint')),
+          // 摘要行：总数 / 已显示 / 旧事件数 / 最近失败（不拉全量历史）
+          data?.blackboardSummary
+            ? h('div', { style: { ...muted, ...mono, marginTop: 4 } },
+              `${t('bbTotal')} ${data.blackboardSummary.total} · ${t('bbShown')} ${data.blackboardSummary.shown} · ${t('bbOlder')} ${data.blackboardSummary.older}`
+              + `${data.blackboardMode ? ` · ${data.blackboardMode}` : ''}`
+              + `${(data.blackboardSummary.failedDecisions || []).length ? ` · ${t('bbFailed')} ${data.blackboardSummary.failedDecisions.length}` : ''}`)
+            : null,
           !coordinationEnabled ? h(Empty, { text: '—' }) : !sessionAttached ? h(Empty, { text: t('noSessionSnapshot') }) : events.length === 0 ? h(Empty, { text: t('noEvents') }) : events.map((event, index) =>
             h('div', { key: `${event.at || ''}-${index}`, style: { ...row, gridTemplateColumns: 'minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(160px, 1.5fr)' } },
               h('div', { style: mono }, fmt(event.kind)),

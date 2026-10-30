@@ -32,6 +32,18 @@ const CHAIN = [
   { nodeId: 'NODE-DELIVER', stage: 'deliver', producer: 'ROLE-CODE-01', auditor: 'ROLE-AUDIT_CODE-01' },
 ];
 
+/** 本测试自己的 6 节点 spec（生产路径不再自动生成固定流水线）。 */
+const CHAIN_SPEC = {
+  wish: '持久化验收：6 节点全链',
+  nodes: CHAIN.map((node, index) => ({
+    nodeId: node.nodeId,
+    title: node.nodeId,
+    stage: node.stage,
+    deps: index === 0 ? [] : [CHAIN[index - 1].nodeId],
+    acceptance: { kind: 'exists' },
+  })),
+};
+
 const checks = [];
 function check(name, fn) {
   try {
@@ -45,6 +57,7 @@ function check(name, fn) {
 // ── 代次 1：建图 + 6 节点全链 + 逐节点落盘 ──────────────────
 const p1 = await CorePersistence.open({ dir, mode: 'node', owner: 'gen-1' });
 core.submitWish({ text: '持久化验收：6 节点全链', maxParallel: 6, budgetTokens: 0 });
+core.graphCommit(CHAIN_SPEC);
 
 const steps = [];
 for (const node of CHAIN) {
