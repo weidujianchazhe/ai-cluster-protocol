@@ -60,9 +60,9 @@ const ctx = {
 const mod = await import(pathToFileURL(path.join(root, 'lib', 'index.js')).href);
 const handle = mod.apply(ctx, { workspaceRoot, stateDir: '.l0-control-selftest' });
 
-check('apply: 注册 18 个工具（含 project_init / graph_plan / graph_commit / memory_load）', () => ({
+check('apply: 注册 19 个工具（含 project_init / graph_plan / graph_commit / memory_load / memory_writeback）', () => ({
   ok:
-    registered.length === 18 &&
+    registered.length === 19 &&
     registered.includes('project_init') &&
     registered.includes('graph_plan') &&
     registered.includes('graph_commit') &&
@@ -71,7 +71,7 @@ check('apply: 注册 18 个工具（含 project_init / graph_plan / graph_commit
 }));
 
 check('apply: 注册 l0control 服务', () => ({
-  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === 18,
+  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === 19,
   detail: { describe: provided.l0control?.describe?.().toolCount ?? null },
 }));
 
@@ -143,7 +143,7 @@ check('capabilities: native 分级覆盖 18 工具', () => {
   const nativeTools = keys.filter((key) => grades[key].grade === 'native');
   return {
     ok:
-      keys.length === 18 &&
+      keys.length === 19 &&
       nativeTools.includes('team_status') &&
       grades.team_status.nativeService === 'agentTeams' &&
       grades.project_init.grade === 'self-built' &&
