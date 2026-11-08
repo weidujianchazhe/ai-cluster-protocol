@@ -1,0 +1,29 @@
+{
+  "graph": [
+    { "file": "fixtures/graph/valid_min.json", "expect": "valid" },
+    { "file": "fixtures/graph/valid_full.json", "expect": "valid" },
+    { "file": "fixtures/graph/valid_decision_l2_default.json", "expect": "valid" },
+    { "file": "fixtures/graph/invalid_missing_goal.json", "expect": "invalid", "expect_error_contains": "goal" },
+    { "file": "fixtures/graph/invalid_bad_graph_id.json", "expect": "invalid", "expect_error_contains": "GRAPH-" },
+    { "file": "fixtures/graph/invalid_missing_acceptance.json", "expect": "invalid", "expect_error_contains": "acceptance" },
+    { "file": "fixtures/graph/invalid_bad_node_status.json", "expect": "invalid", "expect_error_contains": "status" },
+    { "file": "fixtures/graph/invalid_negative_budget.json", "expect": "invalid", "expect_error_contains": "max_tokens" },
+    { "file": "fixtures/graph/invalid_unknown_scope.json", "expect": "invalid", "expect_error_contains": "scope" },
+    { "file": "fixtures/graph/invalid_dep_cycle.json", "expect": "invalid", "expect_error_contains": "环" },
+    { "file": "fixtures/graph/invalid_accepted_without_verifier.json", "expect": "invalid", "expect_error_contains": "verifier" },
+    { "file": "fixtures/graph/invalid_l2_decision_missing_default.json", "expect": "invalid", "expect_error_contains": "default_option_id" },
+    { "file": "fixtures/graph/invalid_l2_timeout_mismatch.json", "expect": "invalid", "expect_error_contains": "超时" },
+    { "file": "fixtures/graph/invalid_done_without_evidence.json", "expect": "invalid", "expect_error_contains": "缺证据" },
+    { "file": "fixtures/graph/invalid_ready_dependency_not_done.json", "expect": "invalid", "expect_error_contains": "ready" },
+    { "file": "fixtures/graph/invalid_done_evidence_failed.json", "expect": "invalid", "expect_error_contains": "证据未通过" }
+  ],
+  "l11": [
+    { "file": "fixtures/l11/case_shareable_allowed.json", "expect": { "decision": "allow", "reasons": [], "contaminated": [] } },
+    { "file": "fixtures/l11/case_private_denied.json", "expect": { "decision": "deny", "reasons": ["PRIVATE_SCOPE"], "contaminated": [] } },
+    { "file": "fixtures/l11/case_unlabeled_denied.json", "expect": { "decision": "deny", "reasons": ["UNLABELED_SCOPE"], "contaminated": [] } },
+    { "file": "fixtures/l11/case_stale_version.json", "expect": { "decision": "invalidate", "reasons": ["STALE_UNIT"], "contaminated": [] } },
+    { "file": "fixtures/l11/case_revocation_contamination.json", "expect": { "decision": "invalidate", "reasons": ["REVOKED_UPSTREAM"], "contaminated": ["UNIT-A", "UNIT-B"] } },
+    { "file": "fixtures/l11/case_competing_denied.json", "expect": { "decision": "deny", "reasons": ["COMPETING_PATH"], "contaminated": [] } },
+    { "file": "fixtures/l11/case_mislabel_audit.json", "expect": { "decision": "deny", "reasons": ["UNVERIFIED"], "contaminated": [] } }
+  ]
+}

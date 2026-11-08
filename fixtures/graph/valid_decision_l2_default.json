@@ -1,0 +1,36 @@
+{
+  "graph_id": "GRAPH-20261029-E1F2A3",
+  "goal": "L2 决策超时按默认推进（正例）",
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "决策按默认推进", "verifier_id": "decision-check" }
+  ],
+  "budget": { "max_tokens": 100, "max_calls": 2, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "等待 L2 决策", "spec": "s", "status": "planned", "deps": [], "decision_id": "DEC-001" }
+  ],
+  "edges": [],
+  "artifacts": [],
+  "events": [],
+  "ledger": { "entries": [] },
+  "decisions": [
+    {
+      "decision_id": "DEC-001",
+      "node_id": "NODE-001",
+      "level": "L2",
+      "question": "UI 默认风格选哪个？",
+      "options": [
+        { "option_id": "opt-a", "label": "默认：现代简约" },
+        { "option_id": "opt-b", "label": "复古像素" }
+      ],
+      "default_option_id": "opt-a",
+      "chosen_option_id": "opt-a",
+      "reversible": true,
+      "impact": "medium",
+      "status": "timed_out",
+      "timeout_sec": 600,
+      "decided_at": "2026-10-29T01:00:00+08:00",
+      "note": "超时按默认推进"
+    }
+  ]
+}

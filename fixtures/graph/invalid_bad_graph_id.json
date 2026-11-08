@@ -1,0 +1,16 @@
+{
+  "graph_id": "graph-20261029-000001",
+  "goal": "图编号格式错误",
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "x", "verifier_id": "v" }
+  ],
+  "budget": { "max_tokens": 10, "max_calls": 1, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "t", "spec": "s", "status": "planned", "deps": [] }
+  ],
+  "edges": [],
+  "artifacts": [],
+  "events": [],
+  "ledger": { "entries": [] }
+}

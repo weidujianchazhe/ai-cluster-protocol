@@ -1,0 +1,16 @@
+- insert:
+    - id: dsh-l0-control
+      name: '@local/dsh-l0-control'
+      config:
+        stateDir: '.l0-control'
+        journalFile: 'journal.jsonl'
+        snapshotFile: 'snapshot.json'
+        sandboxMode: 'danger-full-access'
+        maxParallel: 6
+        defaultBudgetTokens: 0
+        projectionEnabled: true
+        toolPrefix: ''
+        persistence: 'node'
+        persistenceDir: 'core-state'
+        lockWaitMs: 15000
+        lockTtlMs: 1800000

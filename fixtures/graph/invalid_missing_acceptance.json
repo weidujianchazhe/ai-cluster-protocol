@@ -1,0 +1,14 @@
+{
+  "graph_id": "GRAPH-20261029-000002",
+  "goal": "验收为空",
+  "acceptance": [],
+  "budget": { "max_tokens": 10, "max_calls": 1, "max_wall_min": 1, "max_parallel": 1 },
+  "version": 1,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "t", "spec": "s", "status": "planned", "deps": [] }
+  ],
+  "edges": [],
+  "artifacts": [],
+  "events": [],
+  "ledger": { "entries": [] }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "AI Cluster Protocol",
+    "description": "Wish-driven DSH cluster-work plugin: dispatches multiple subagents in parallel; subagents can recursively dispatch more. High throughput and high work volume, with markedly higher token consumption."
+  }
+}

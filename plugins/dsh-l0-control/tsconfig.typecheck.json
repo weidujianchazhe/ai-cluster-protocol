@@ -1,0 +1,20 @@
+{
+  "//": "typecheck 专用：源码用 `.ts` 后缀 import（构建期由 scripts/build.mjs 改写为 .js），所以必须开 allowImportingTsExtensions；strict 暂关——历史上这批源码从未过类型检查，先求“结构/导出/调用面”可机检，再逐步收紧。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "allowJs": false,
+    "types": ["node"],
+    "lib": ["ES2023"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/tests/**", "lib/**", "node_modules/**"]
+}

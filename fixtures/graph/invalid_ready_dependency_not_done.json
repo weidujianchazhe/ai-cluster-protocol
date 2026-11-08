@@ -1,0 +1,19 @@
+{
+  "graph_id": "GRAPH-20261029-B00004",
+  "goal": "ready 节点依赖未 done（反例）",
+  "acceptance": [
+    { "acceptance_id": "ACC-001", "criterion": "x", "verifier_id": "v" }
+  ],
+  "budget": { "max_tokens": 100, "max_calls": 2, "max_wall_min": 1, "max_parallel": 2 },
+  "version": 2,
+  "nodes": [
+    { "node_id": "NODE-001", "title": "t1", "spec": "s1", "status": "running", "deps": [] },
+    { "node_id": "NODE-002", "title": "t2", "spec": "s2", "status": "ready", "deps": ["NODE-001"] }
+  ],
+  "edges": [
+    { "from": "NODE-001", "to": "NODE-002", "kind": "blocks" }
+  ],
+  "artifacts": [],
+  "events": [],
+  "ledger": { "entries": [] }
+}
