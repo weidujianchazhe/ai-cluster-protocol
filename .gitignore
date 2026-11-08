@@ -41,3 +41,9 @@ inbox/
 moltbook/
 notes/
 eigenflux-audit/
+
+# 本地研发产物 / 备份：不进公开包
+artifacts/
+audit/
+*.bak
+*.orig

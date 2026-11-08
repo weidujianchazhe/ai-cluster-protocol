@@ -51,7 +51,7 @@ export function claim(store       , nodeId        , owner        , options      
     node_id: nodeId,
     owner,
     fencing_token: token,
-    expires_at: t + ttl,
+    expires_at: t + ttl * 1000,
     heartbeat_at: t,
   };
   store.state.leases.set(nodeId, lease);
@@ -91,7 +91,7 @@ export function renew(
   const t = options.now ?? store.nowMs();
   if (lease.expires_at <= t) throw new LeaseExpired(`租约已过期：${nodeId}`);
   const ttl = options.ttlSec ?? 60;
-  lease.expires_at = t + ttl;
+  lease.expires_at = t + ttl * 1000;
   lease.heartbeat_at = t;
   store.state.leases.set(nodeId, lease);
   store.journal.append("lease_renewed", nodeId, {
@@ -176,7 +176,7 @@ export function takeover(
     node_id: nodeId,
     owner: newOwner,
     fencing_token: token,
-    expires_at: t + ttl,
+    expires_at: t + ttl * 1000,
     heartbeat_at: t,
   };
   store.state.leases.set(nodeId, next);

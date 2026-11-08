@@ -324,19 +324,21 @@ check("fake_ready_demoted", () => {
 check("leases_flow", () => {
   const store = newStore();
   addNode(store, { nodeId: "N1", title: "t", spec: "s", status: "ready" });
-  const lease1 = claim(store, "N1", "agent-A", { ttlSec: 10, now: 1000 });
+  // 时间基用毫秒：租约的 expires_at = now + ttlSec*1000（ttlSec 是秒，内部换毫秒）
+  const T = (ms: number) => ms;
+  const lease1 = claim(store, "N1", "agent-A", { ttlSec: 10, now: T(1_000_000) });
   assert(lease1.fencing_token === 1, "首个令牌应为 1");
   assert(getNode(store, "N1")?.status === "claimed", "claim 后应 claimed");
   assert(getNode(store, "N1")?.assignee === "agent-A", "assignee 应为 owner");
-  renew(store, "N1", "agent-A", 1, { ttlSec: 10, now: 1005 });
-  const expired = expire(store, { now: 1020 });
+  renew(store, "N1", "agent-A", 1, { ttlSec: 10, now: T(1_005_000) });
+  const expired = expire(store, { now: T(1_020_000) });
   assert(JSON.stringify(expired) === JSON.stringify(["N1"]), "过期回收应返回 N1");
   const after = getNode(store, "N1");
   assert(after?.status === "ready" && after?.attempts === 1, "过期后应 ready + attempts 1");
   assert(after?.assignee === null, "过期后 assignee 应清空");
-  const lease2 = claim(store, "N1", "agent-B", { ttlSec: 10, now: 1030 });
+  const lease2 = claim(store, "N1", "agent-B", { ttlSec: 10, now: T(1_030_000) });
   assert(lease2.fencing_token === 2, "再次 claim 令牌应递增到 2");
-  const taken = takeover(store, "N1", "agent-C", { ttlSec: 10, now: 1100 });
+  const taken = takeover(store, "N1", "agent-C", { ttlSec: 10, now: T(1_100_000) });
   assert(taken.fencing_token === 3 && taken.owner === "agent-C", "takeover 应换 owner 并递增令牌");
   release(store, "N1", "agent-C", 3);
   assert(currentLease(store, "N1") === undefined, "release 后租约应消失");
@@ -351,11 +353,11 @@ check("leases_flow", () => {
 check("leases_fencing_guards", () => {
   const store = newStore();
   addNode(store, { nodeId: "N1", title: "t", spec: "s", status: "ready" });
-  claim(store, "N1", "agent-A", { ttlSec: 10, now: 1000 });
-  expectError(() => claim(store, "N1", "agent-B", { now: 1005 }), "lease_held");
-  expectError(() => renew(store, "N1", "agent-A", 99, { now: 1005 }), "fencing");
-  expectError(() => renew(store, "N1", "agent-A", 1, { now: 1011 }), "lease_expired");
-  expectError(() => takeover(store, "N1", "agent-B", { now: 1005 }), "lease_held");
+  claim(store, "N1", "agent-A", { ttlSec: 10, now: 1_000_000 });
+  expectError(() => claim(store, "N1", "agent-B", { now: 1_005_000 }), "lease_held");
+  expectError(() => renew(store, "N1", "agent-A", 99, { now: 1_005_000 }), "fencing");
+  expectError(() => renew(store, "N1", "agent-A", 1, { now: 1_011_000 }), "lease_expired");
+  expectError(() => takeover(store, "N1", "agent-B", { now: 1_005_000 }), "lease_held");
 });
 
 // ── 14. 门面契约（N2 约定的 8 个动作） ─────────────────────────────────
@@ -687,6 +689,77 @@ check("verify_done_and_reject_semantics", () => {
     `驳回 reason 应为 rejected:*，实际 ${String(lastStatus?.payload.reason)}`,
   );
   assert(replayMismatches(store).length === 0, "驳回后 replay 应一致");
+  resetCore();
+  configureIo(null);
+});
+
+// ── 18b. 验证器白名单：旧污染行不阻塞节点收尾（append-only + 前置过滤）──────
+check("verifier_whitelist_filters_legacy_rows", () => {
+  resetCore();
+  configureIo({
+    exists: () => true,
+    isFile: () => true,
+    sha256: () => SHA,
+    readText: () => "hello",
+    resolve: (p: string) => `/virtual/${p}`,
+  });
+  const store = new Store({ clock: fixedClock() });
+  configureCore({ store });
+  installReadyHook(store);
+
+  // A：先被一条「验证器不在清单」的证据污染，再补一条合规证据 → 应能 done
+  addNode(store, { nodeId: "A", title: "a", spec: "s", evidenceRequired: ["artifact"], verifierIds: ["verifier-ci"] });
+  bootstrap(store);
+  claimTask({ nodeId: "A", instanceId: "ROLE-CODE-01" });
+  const dirty = submitEvidence({
+    nodeId: "A",
+    artifactPath: "a.txt",
+    verifier: "pytest:tests/test_x.py",
+    producerInstance: "ROLE-CODE-01",
+    auditorInstance: "ROLE-AUDIT-01",
+    acceptance: { kind: "exists" },
+  }) as Record<string, unknown>;
+  assert(dirty.ok === true, `污染行本身应可落账（append-only）：${JSON.stringify(dirty)}`);
+
+  // 只有污染行时：不得 done，但原因必须可执行（说明换 verifier 即可，不是让我改节点）
+  const blocked = verifyDone({ nodeId: "A", producer_instance: "ROLE-CODE-01", auditor_instance: "ROLE-AUDIT-01" });
+  assert(blocked.ok === false && blocked.error === "credential-unavailable", "只有不合格证据时不得 done");
+  assert(
+    String(blocked.reason ?? "").includes("验证器不在允许清单"),
+    `原因应指出验证器不在允许清单，实际：${String(blocked.reason)}`,
+  );
+  assert(String(blocked.reason ?? "").includes("verifier-ci"), "原因应给出节点的允许清单，便于直接改对");
+
+  // 上一次失败已把节点驳回为 ready（rejectNode：ready + attempts+1），先重新领取再交证据
+  claimTask({ nodeId: "A", instanceId: "ROLE-CODE-01" });
+  const clean = submitEvidence({
+    nodeId: "A",
+    artifactPath: "a.txt",
+    verifier: "verifier-ci",
+    producerInstance: "ROLE-CODE-01",
+    auditorInstance: "ROLE-AUDIT-01",
+    acceptance: { kind: "exists" },
+  }) as Record<string, unknown>;
+  assert(clean.ok === true, "合规证据应可提交");
+  const done = verifyDone({ nodeId: "A", producer_instance: "ROLE-CODE-01", auditor_instance: "ROLE-AUDIT-01" });
+  assert(done.ok === true && done.status === "done", `旧污染行不得阻塞收尾：${JSON.stringify(done)}`);
+  assert(replayMismatches(store).length === 0, "收尾后 replay 应一致");
+
+  // B：节点没设 verifier_ids（不限）→ 任意 verifier 都作数
+  addNode(store, { nodeId: "B", title: "b", spec: "s", evidenceRequired: ["artifact"] });
+  bootstrap(store);
+  claimTask({ nodeId: "B", instanceId: "ROLE-CODE-02" });
+  submitEvidence({
+    nodeId: "B",
+    artifactPath: "b.txt",
+    verifier: "pytest:tests/test_y.py",
+    producerInstance: "ROLE-CODE-02",
+    auditorInstance: "ROLE-AUDIT-02",
+    acceptance: { kind: "exists" },
+  });
+  const noWhitelist = verifyDone({ nodeId: "B", producer_instance: "ROLE-CODE-02", auditor_instance: "ROLE-AUDIT-02" });
+  assert(noWhitelist.ok === true, `未设白名单时不应按 verifier 拒：${JSON.stringify(noWhitelist)}`);
+
   resetCore();
   configureIo(null);
 });

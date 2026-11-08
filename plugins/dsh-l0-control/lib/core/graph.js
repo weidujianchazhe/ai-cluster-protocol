@@ -301,13 +301,8 @@ function validateDoneCredential(
     );
   }
 
-  const allowed = new Set(node.verifier_ids);
-  if (allowed.size) {
-    const bad = [...new Set(rows.map((r) => r.verifier_id))]
-      .filter((v) => !allowed.has(v))
-      .sort();
-    if (bad.length) throw new CredentialError(`验证器不在允许清单：${bad.join(",")}`);
-  }
+  // 验证器白名单已在 doneCredentialWithReason 的候选集过滤里处理（不逐行否决）。
+  // 走到这里 rows 全部来自允许清单（或节点未设清单），无需再判。
 
   for (const dep of node.deps) {
     const depNode = store.state.nodes.get(dep);
@@ -323,6 +318,16 @@ function validateDoneCredential(
     }
   }
   return ids;
+}
+
+/**
+ * 这条证据有没有「作证资格」：节点没设白名单 → 全放行；设了 → 只认清单内的 verifier_id。
+ * 不在清单的行不删、不改成 fail，只是不参与凭证铸造（可引用、可进报告、可追溯）。
+ */
+function verifierAllowed(node            , row                )          {
+  const allowed = new Set(node.verifier_ids);
+  if (!allowed.size) return true;
+  return allowed.has(row.verifier_id);
 }
 
                                         
@@ -347,9 +352,27 @@ export function doneCredentialWithReason(store       , nodeId        )          
   // 这里必须**过滤**而不是在 validateDoneCredential 里对每一行抛错：后者会让
   // 「同一节点一旦提交过一条推断证据」永久无法收尾——后来补上 verified 也救不回来，
   // 因为遗留的 inferred 行仍然在候选集里。第一次实测就是这么失败的。
-  const rows = passEvidence(store, nodeId).filter(
+  const allVerified = passEvidence(store, nodeId).filter(
     (row) => String(row.provenance ?? "verified") === "verified",
   );
+  // 验证器白名单同样**前置过滤**，不逐行否决。
+  //
+  // 为什么：证据是 append-only 且不可撤回（这是对的），但「历史上有一条用错 verifier 的证据」
+  // 不应该让节点**永久**无法收尾。逐行否决的后果是：补交一条合规证据也救不回来，只能新建节点
+  // 或改状态文件——2026-11 实测就是这么把一个合格节点卡死的（verifier 用了 `pytest:...`）。
+  // 语义上 verifier_ids 是「谁能作证」的白名单，不在名单里的行仍留在库里可引用，只是不具作证资格。
+  const verifierFiltered = allVerified.filter((row) => verifierAllowed(node, row));
+  const rows = verifierFiltered;
+  if (!rows.length && allVerified.length) {
+    const allowed = [...new Set(node.verifier_ids)].sort();
+    const seen = [...new Set(allVerified.map((r) => r.verifier_id))].sort();
+    return {
+      credential: null,
+      reason:
+        `证据的验证器不在允许清单：${seen.join(",")}（节点允许：${allowed.join(",") || "不限"}）；` +
+        "换用允许清单内的 verifier 重新提交即可，节点与旧证据都不需要改",
+    };
+  }
   const candidate                 = {
     node_id: nodeId,
     evidence: rows.map((r) => r.evidence_id),

@@ -132,17 +132,24 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     }
     const origin = allowedOrigin(req, options.allowedOrigins);
     const hasOrigin = typeof req.headers.origin === 'string' && req.headers.origin.length > 0;
+    // Chromium 的「本地网络访问」策略：页面去请求 127.0.0.1 上的另一个端口时，
+    // 预检会带 `Access-Control-Request-Private-Network: true`，服务端必须回
+    // `Access-Control-Allow-Private-Network: true`，否则浏览器直接判失败——
+    // 表现就是面板报 Failed to fetch，而用 node/curl 测同一个 URL 却是 200。
+    const wantsPrivateNetwork = String(req.headers['access-control-request-private-network'] ?? '').toLowerCase() === 'true';
     if (method === 'OPTIONS') {
       if (!origin) {
         send(res, 403, { ok: false, error: 'origin-forbidden' });
         return;
       }
-      res.writeHead(204, {
+      const headers: Record<string, string | number> = {
         'access-control-allow-origin': origin,
         'access-control-allow-methods': 'GET, POST, OPTIONS',
-        'access-control-allow-headers': 'content-type',
+        'access-control-allow-headers': 'content-type, accept',
         vary: 'Origin',
-      });
+      };
+      if (wantsPrivateNetwork) headers['access-control-allow-private-network'] = 'true';
+      res.writeHead(204, headers);
       res.end();
       return;
     }
@@ -154,6 +161,7 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     if (origin) {
       res.setHeader('access-control-allow-origin', origin);
       res.setHeader('vary', 'Origin');
+      if (wantsPrivateNetwork) res.setHeader('access-control-allow-private-network', 'true');
     }
     // GET /ui/cluster：工作区集群状态
     if (method === 'GET' && path === '/ui/cluster') {
