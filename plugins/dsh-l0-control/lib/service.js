@@ -27,11 +27,13 @@ import { runProjectInit } from './bootstrap/index.js';
  * 看到的只是一条与真实结果无关的错误（`value is not lossless JSON`）。core 的
  * 返回值由多处拼装，无法保证每个可选字段都显式给 null，所以在服务层出口统一
  * 归一化：删除 `undefined` 键、非有限数转 null、Date 转 ISO、Map/Set 展开。
+ * 同时检测循环引用（WeakSet），避免栈溢出。
  */
 export function sanitizeForHost   (
   value   ,
   onDrop                                         ,
   path = '$',
+  _seen = new WeakSet        ()  // 循环引用检测（WeakSet 不阻止 GC）
 )    {
   const drop = (reason        ) => {
     if (!onDrop) return;
@@ -64,25 +66,32 @@ export function sanitizeForHost   (
   }
   if (value instanceof Date) return value.toISOString()                ;
   if (Array.isArray(value)) {
-    return value.map((item, index) => sanitizeForHost(item, onDrop, `${path}[${index}]`))                ;
+    return value.map((item, index) => sanitizeForHost(item, onDrop, `${path}[${index}]`, _seen))                ;
   }
   if (value instanceof Map) {
     drop('map');
-    return sanitizeForHost(Object.fromEntries(value                         )                , onDrop, path);
+    return sanitizeForHost(Object.fromEntries(value                         )                , onDrop, path, _seen);
   }
   if (value instanceof Set) {
     drop('set');
-    return sanitizeForHost([...(value                )]                , onDrop, path);
+    return sanitizeForHost([...(value                )]                , onDrop, path, _seen);
   }
   if (kind === 'object') {
+    // 循环引用检测
+    if (_seen.has(value          )) {
+      drop('circular-reference');
+      return '[Circular]'                ;
+    }
+    _seen.add(value          );
     const out                          = {};
     for (const [key, item] of Object.entries(value                           )) {
       if (item === undefined) {
         drop(`${path}.${key}`);
         continue;
       }
-      out[key] = sanitizeForHost(item, onDrop, `${path}.${key}`);
+      out[key] = sanitizeForHost(item, onDrop, `${path}.${key}`, _seen);
     }
+    _seen.delete(value          );  // 回溯时移除，允许同一对象在不同分支出现
     return out                ;
   }
   return value;
@@ -102,7 +111,8 @@ export function normalizeManagement(value         )                 {
                                                                                                                     
                                                                             
                                                                               
-                                                 
+                                                    
+                                                                                              
                                                                               
                                                                       
                                                                                                             
@@ -958,29 +968,33 @@ export class L0ControlService {
 
   async graphStatus(input                                      = {}) {
     const journal = this.journalSummary();
+    // P1-5 有界输出（P3 优化）：分页参数**直接下传 core**，由 core 只投影当前页；
+    // service 不再「取全量再切片」——大图时 CPU/内存都跟页大小走。
+    const limit = Number.isFinite(Number(input?.limit)) && Number(input.limit) > 0 ? Math.min(Math.floor(Number(input.limit)), 500) : 50;
+    const offset = Number.isFinite(Number(input?.offset)) && Number(input.offset) > 0 ? Math.floor(Number(input.offset)) : 0;
     const coreResult = await this.withCore('graph_status', (core) =>
-      core.graphStatus ? core.graphStatus() : Promise.resolve({ delegated: false, reason: 'core.graphStatus 未实现' }),
+      core.graphStatus
+        ? core.graphStatus({ limit, offset })
+        : Promise.resolve({ delegated: false, reason: 'core.graphStatus 未实现' }),
     );
-    // P1-5 有界输出：core 已只返最小节点投影；service 层再按 limit/offset 切片（默认 50）。
-    // withCore 会把 core 返回值包进 `{ok, action, result}`，所以切片必须作用在 `result` 上，
-    // 同时把 `nodes` 与 `graph.nodes` 两处都换成同一份切片（下游谁读哪个都不会看到全量）。
+    // 兼容：老 core 若忽略分页参数、返回全量列表，这里兜底再切一次，绝不把全量抛给上层。
     const pagedCore = (() => {
       const wrapped = coreResult                           ;
       const inner = (wrapped?.result ?? wrapped)                       ;
       const list = Array.isArray(inner?.graph?.nodes) ? inner.graph.nodes : Array.isArray(inner?.nodes) ? inner.nodes : null;
       if (!Array.isArray(list)) return coreResult;
-      const limit = Number.isFinite(Number(input?.limit)) && Number(input.limit) > 0 ? Math.min(Math.floor(Number(input.limit)), 500) : 50;
-      const offset = Number.isFinite(Number(input?.offset)) && Number(input.offset) > 0 ? Math.floor(Number(input.offset)) : 0;
-      const slice = list.slice(offset, offset + limit);
+      const total = Number(inner?.page?.total ?? inner?.counts?.nodes ?? list.length);
+      const overLimit = list.length > limit; // 老 core 返回了全量 → 需要兜底切片
+      const slice = overLimit ? list.slice(offset, offset + limit) : list;
       const pagedInner = {
         ...inner,
         nodes: slice,
         graph: { ...(inner?.graph ?? {}), nodes: slice },
-        page: {
+        page: inner?.page ?? {
           limit,
           offset,
-          total: list.length,
-          truncated: offset + limit < list.length,
+          total,
+          truncated: offset + limit < total,
           hint: '完整节点走 graph_export 或按 nodeId 点查',
         },
       };

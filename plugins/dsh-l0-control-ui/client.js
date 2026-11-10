@@ -5,8 +5,108 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const NS = 'l0-control-ui';
     const PANEL_ID = 'l0-control';
-    const SNAPSHOT_URL = 'http://127.0.0.1:47831/ui/snapshot';
-  const ACCESS_URL = 'http://127.0.0.1:47831/ui/access';
+    // ── 侧车地址解析 ─────────────────────────────────────────────────────
+    // 侧车端口是**可配置的**（cfg.uiPort，默认 47831）。写死会在改端口后整套请求
+    // 落到 `Failed to fetch`，且错误看起来像"没启动"，排查方向被完全带偏。
+    // 策略：注入值/上次成功的值 → 默认端口 → 候选探测；成功后记进 localStorage。
+    const DEFAULT_SIDECAR_PORT = 47831;
+    const BASE_STORAGE_KEY = 'l0-control-ui.base';
+    const baseCandidates = () => {
+      const list = [];
+      try {
+        const injected = (window.__DSH_L0_CONTROL_UI__ && window.__DSH_L0_CONTROL_UI__.baseUrl) || null;
+        const saved = window.localStorage ? window.localStorage.getItem(BASE_STORAGE_KEY) : null;
+        const def = window.__DSH_L0_CONTROL_UI__ && window.__DSH_L0_CONTROL_UI__.port;
+        if (injected) list.push(String(injected));
+        if (saved) list.push(String(saved));
+        list.push(`http://127.0.0.1:${Number(def) || DEFAULT_SIDECAR_PORT}`);
+        list.push(`http://127.0.0.1:${DEFAULT_SIDECAR_PORT}`);
+      } catch {
+        list.push(`http://127.0.0.1:${DEFAULT_SIDECAR_PORT}`);
+      }
+      return [...new Set(list.map((b) => String(b).replace(/\/$/, '')))];
+    };
+
+    let resolvedBase = null;
+    let resolving = null;
+
+    /** 探测哪个 base 上是我们的侧车（用 /ui/health，极便宜，不构造快照）。 */
+    const resolveBase = async () => {
+      if (resolvedBase) return resolvedBase;
+      if (resolving) return resolving;
+      resolving = (async () => {
+        for (const base of baseCandidates()) {
+          try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 2500);
+            const res = await fetch(`${base}/ui/health`, {
+              signal: ctrl.signal,
+              headers: { accept: 'application/json' },
+            });
+            clearTimeout(timer);
+            if (!res.ok) continue;
+            const json = await res.json().catch(() => null);
+            // 认服务名，避免把别的 47831 服务当成侧车
+            if (json && json.ok === true && String(json.service || '').includes('l0-control')) {
+              resolvedBase = base;
+              try { window.localStorage && window.localStorage.setItem(BASE_STORAGE_KEY, base); } catch {}
+              return base;
+            }
+          } catch {
+            // 该候选不可用，试下一个
+          }
+        }
+        throw new Error('sidecar-unreachable');
+      })();
+      try {
+        return await resolving;
+      } finally {
+        resolving = null;
+      }
+    };
+
+    /** 带超时的请求：侧车卡住时不能让面板无限转圈。 */
+    const request = async (base, path, init = {}, timeoutMs = 8000) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        return await fetch(`${base}${path}`, { ...init, signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    /** 统一 GET JSON：自动解析 base、超时、并把失败原因说清楚。 */
+    const getJson = async (path, timeoutMs) => {
+      const base = await resolveBase();
+      const res = await request(base, path, { headers: { accept: 'application/json' } }, timeoutMs);
+      const json = await res.json().catch(() => null);
+      if (!res.ok) {
+        const err = new Error((json && (json.error || json.message)) || `HTTP ${res.status}`);
+        err.status = res.status;
+        err.payload = json;
+        throw err;
+      }
+      return json;
+    };
+
+    /** 统一 POST JSON。 */
+    const postJson = async (path, body, timeoutMs = 15000) => {
+      const base = await resolveBase();
+      const res = await request(base, path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(body || {}),
+      }, timeoutMs);
+      const json = await res.json().catch(() => null);
+      if (!res.ok && (!json || json.ok !== false)) {
+        const err = new Error((json && (json.error || json.message)) || `HTTP ${res.status}`);
+        err.status = res.status;
+        err.payload = json;
+        throw err;
+      }
+      return json;
+    };
 
     const ZH = {
       nav: 'AI集群工作协议',
@@ -18,7 +118,7 @@ window.__ModuleLoader__.load({
       checkUpdate: '检查更新',
       close: '关闭',
       loading: '加载中…',
-      offline: 'UI 侧车未连接；请确认控制面插件已启用，或让 Agent 调 graph_status。',
+      offline: 'UI 侧车未连接：面板已在回环地址上探测侧车端口但没找到。请确认控制面插件（dsh-l0-control）已启用；若改过 uiPort，请把面板地址指到该端口。',
       members: '团队成员',
       subagents: '递归子 Agent 总数',
       activeSubagents: '活跃子 Agent',
@@ -51,7 +151,7 @@ window.__ModuleLoader__.load({
       activeTitle: '活跃子 Agent',
       activeHint: '只显示当前 activity=running 的递归子 Agent；DSH 列表里的绿点是“可继续”，不等于运行中。',
       activeEmpty: '当前没有运行中的子 Agent（历史子 Agent 仍保留在递归统计中）。',
-      readyHint: '图谱为空（0 nodes）：就绪节点=依赖已完成、可被 task_claim 的节点；先 wish_submit 生成工作图。',
+      readyHint: '图谱为空（0 nodes）：就绪节点=依赖已完成、可被 task_claim 的节点；先 graph_plan 预览、graph_commit 落图（wish_submit 只记录意图，不建图）。',
       noTasks: '暂无任务',
       noEvents: '暂无事件',
       role: '角色',
@@ -94,7 +194,7 @@ window.__ModuleLoader__.load({
       checkUpdate: 'Check updates',
       close: 'Close',
       loading: 'Loading…',
-      offline: 'UI sidecar is not connected. Check the control plugin is enabled, or ask the Agent to call graph_status.',
+      offline: 'UI sidecar not found on loopback: the panel probed the sidecar port and got nothing. Make sure dsh-l0-control is enabled; if uiPort was changed, point the panel at that port.',
       members: 'Members',
       subagents: 'Recursive subagent total',
       activeSubagents: 'Active subagents',
@@ -127,7 +227,7 @@ window.__ModuleLoader__.load({
       activeTitle: 'Active subagents',
       activeHint: 'Only recursive subagents with activity=running; a green dot in the DSH list means resumable, not running.',
       activeEmpty: 'No subagent is running right now (historical subagents remain in the recursive count).',
-      readyHint: 'Graph is empty (0 nodes): ready nodes are dependency-satisfied nodes claimable by task_claim; run wish_submit first.',
+      readyHint: 'Graph is empty (0 nodes): ready nodes are dependency-satisfied and claimable by task_claim; preview with graph_plan then graph_commit (wish_submit only records intent, it does not build a graph).',
       noTasks: 'No tasks',
       noEvents: 'No events',
       role: 'Role',
@@ -347,15 +447,13 @@ window.__ModuleLoader__.load({
           return;
         }
         try {
-          const res = await fetch(ACCESS_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ sessionId: target, workspaceRoot: boardWorkspacePath, ...patch, by: 'ui' }),
+          const detail = await postJson('/ui/access', {
+            sessionId: target,
+            workspaceRoot: boardWorkspacePath,
+            ...patch,
+            by: 'ui',
           });
-          if (!res.ok) {
-            const detail = await res.json().catch(() => ({}));
-            throw new Error(detail?.error || `${res.status} ${res.statusText}`);
-          }
+          if (detail && detail.ok === false) throw new Error(detail.error || 'access-failed');
           await load();
         } catch (e) {
           setError(String(e?.message || e));
@@ -369,16 +467,11 @@ window.__ModuleLoader__.load({
           return;
         }
         try {
-          const res = await fetch(`${ACCESS_URL.replace('/ui/access', '')}/ui/cluster-enable`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              workspaceRoot: boardWorkspacePath,
-              sessionId: activeSessionId || liveSessionId || data?.sessionId || null,
-            }),
+          const detail = await postJson('/ui/cluster-enable', {
+            workspaceRoot: boardWorkspacePath,
+            sessionId: activeSessionId || liveSessionId || data?.sessionId || null,
           });
-          const detail = await res.json().catch(() => ({}));
-          if (!res.ok || detail?.ok === false) throw new Error(detail?.error || `${res.status} ${res.statusText}`);
+          if (detail?.ok === false) throw new Error(detail.error || 'cluster-enable-failed');
           await load();
         } catch (e) {
           setError(String(e?.message || e));
@@ -392,10 +485,9 @@ window.__ModuleLoader__.load({
           return;
         }
         try {
-          const res = await fetch(`${ACCESS_URL.replace('/ui/access', '')}/ui/team-refresh`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ workspaceRoot: boardWorkspacePath, sessionId: target }),
+          const res = await postJson('/ui/team-refresh', {
+            workspaceRoot: boardWorkspacePath,
+            sessionId: target,
           });
           const detail = await res.json().catch(() => ({}));
           if (!res.ok || detail?.ok === false) throw new Error(detail?.error || `${res.status} ${res.statusText}`);
@@ -409,18 +501,13 @@ window.__ModuleLoader__.load({
       const [projectResult, setProjectResult] = React.useState(null);
       const createProject = async (dryRun) => {
         try {
-          const res = await fetch(`${ACCESS_URL.replace('/ui/access', '')}/ui/project-init`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: activeSessionId || liveSessionId || data?.sessionId || null,
-              workspaceRoot: boardWorkspacePath,
-              projectName: newName || 'project',
-              wish: newWish || undefined,
-              dryRun,
-            }),
-          });
-          const json = await res.json();
+          const json = await postJson('/ui/project-init', {
+            sessionId: activeSessionId || liveSessionId || data?.sessionId || null,
+            workspaceRoot: boardWorkspacePath,
+            projectName: newName || 'project',
+            wish: newWish || undefined,
+            dryRun,
+          }, 30000);
           setProjectResult(json);
           if (!dryRun && json?.ok) await load();
         } catch (e) {
@@ -430,8 +517,7 @@ window.__ModuleLoader__.load({
       const [updateNotice, setUpdateNotice] = React.useState(null);
       const checkUpdate = async () => {
         try {
-          const res = await fetch(`${SNAPSHOT_URL.replace('/ui/snapshot', '')}/ui/update-check`, { headers: { accept: 'application/json' } });
-          const json = await res.json();
+          const json = await getJson('/ui/update-check', 20000);
           setUpdateNotice(json ?? { ok: false, error: 'update-check-empty' });
         } catch (e) {
           setUpdateNotice({ ok: false, error: 'update-check-failed', message: String(e?.message || e) });
@@ -446,10 +532,8 @@ window.__ModuleLoader__.load({
           if (target) params.set('sessionId', target);
           if (boardWorkspacePath) params.set('workspaceRoot', boardWorkspacePath);
           if (cursorRef.current !== null) params.set('sinceSeq', String(cursorRef.current));
-          const url = params.toString() ? `${SNAPSHOT_URL}?${params.toString()}` : SNAPSHOT_URL;
-          const res = await fetch(url, { headers: { accept: 'application/json' } });
-          if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-          const json = await res.json();
+          const qs = params.toString();
+          const json = await getJson(qs ? `/ui/snapshot?${qs}` : '/ui/snapshot');
           if (!json || json.ok !== true) throw new Error(json?.error || 'snapshot failed');
           // 黑板增量合并：initial/fallback 直接替换；incremental 只把新行接到前面
           const incoming = Array.isArray(json.blackboard) ? json.blackboard : [];
@@ -753,7 +837,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!sessionId) return;
         let alive = true;
-        fetch(`${ACCESS_URL}?sessionId=${encodeURIComponent(sessionId)}`, { headers: { accept: 'application/json' } })
+        getJson(`/ui/access?sessionId=${encodeURIComponent(sessionId)}`)
           .then((res) => res.json())
           .then((json) => { if (alive) setEnabled(json?.enabled === true); })
           .catch(() => { if (alive) setEnabled(true); });
@@ -762,11 +846,7 @@ window.__ModuleLoader__.load({
       if (!sessionId || enabled !== false) return null;
       const enable = async () => {
         try {
-          await fetch(ACCESS_URL, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ sessionId, coordination: true, by: 'composer' }),
-          });
+          await postJson('/ui/access', { sessionId, coordination: true, by: 'composer' });
           setEnabled(true);
         } catch {
           setEnabled(false);

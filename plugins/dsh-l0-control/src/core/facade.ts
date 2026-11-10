@@ -356,34 +356,65 @@ function submitWishImpl(input: WishInput): Record<string, unknown> {
 
 /** 图状态投影（只读）。
  *
- * P1-5 最小投影：核心侧只返 counts + ready 列表 + 最小节点投影（nodeId/title/
- * stage/capability/deps/status），分页/裁剪由 service 层后续接。
+ * P1-5 最小投影 + **core 层分页**：核心侧只返 counts + ready 列表 + 最小节点投影
+ * （nodeId/title/stage/capability/deps/status），并按 `limit/offset` 在**铸造投影前**
+ * 就只处理那一页——大图时不再「先全量 map 再切一刀」，内存峰值与 CPU 都跟着页大小走。
+ *
  * 兼容保留（不静默丢）：version（uiSnapshot 读它）、graph 容器（a2a/observability
- * 读 graph.nodes）、journal、audit。graph.nodes 现为最小投影——旧的
- * attempts/assignee/evidence_required/budget 不再经 graph_status 出，
- * 需要完整信息走 getNode/listNodes/exportProjection（briefNode 路径未动）。
+ * 读 graph.nodes）、journal、audit。graph.nodes 与 nodes 是同一页数据。
  */
-export function graphStatus(): Record<string, unknown> {
+export interface GraphStatusOptions {
+  /** 每页节点数（默认 50，上限 500）。 */
+  limit?: number;
+  /** 起始偏移（默认 0）。 */
+  offset?: number;
+}
+
+export function graphStatus(options: GraphStatusOptions = {}): Record<string, unknown> {
   const store = coreStore();
-  const nodes = listNodes(store);
   const report = store.journal.validateStream();
   // 组成因子巡检：只读，不写 journal。巡检项由 NodeRecord 的因子派生（见 core/guards.ts）。
   const guardReport = runFactorGuards({ store, nowMs: store.nowMs() });
-  const minimal = nodes.map(minimalNode);
+
+  const total = store.state.nodes.size;
+  const limitRaw = Number(options?.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(Math.floor(limitRaw), 500) : 50;
+  const offsetRaw = Number(options?.offset);
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
+
+  // 先排序、只对当前页做投影（map 只跑 pageSize 次，而不是全量）
+  const ordered = listNodes(store);
+  const pageNodes = ordered.slice(offset, offset + limit).map(minimalNode);
+
+  // counts 需要全量状态统计，但只遍历 status 字段，不构造完整记录
+  let done = 0;
+  let blocked = 0;
+  for (const node of store.state.nodes.values()) {
+    if (node.status === "done") done += 1;
+    else if (node.status === "blocked") blocked += 1;
+  }
   const edgeList = edges(store);
+
   return {
     ok: true,
     version: Number(store.state.meta.get("graph_version") ?? "1"),
     ready: readySet(store),
     counts: {
-      nodes: nodes.length,
+      nodes: total,
       edges: edgeList.length,
-      done: nodes.filter((n) => n.status === "done").length,
-      blocked: nodes.filter((n) => n.status === "blocked").length,
+      done,
+      blocked,
     },
-    /** 最小投影列表（供 service 层分页）；graph.nodes 是同一列表的兼容容器。 */
-    nodes: minimal,
-    graph: { nodes: minimal, edges: edgeList },
+    /** 当前页的最小投影；graph.nodes 是同一页的兼容容器。 */
+    nodes: pageNodes,
+    graph: { nodes: pageNodes, edges: edgeList },
+    page: {
+      limit,
+      offset,
+      total,
+      truncated: offset + limit < total,
+      hint: "完整节点走 graph_export 或按 nodeId 点查",
+    },
     journal: {
       events: store.journal.count(),
       lastSeq: store.journal.count(),

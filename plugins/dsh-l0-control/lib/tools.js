@@ -7,24 +7,15 @@
  *   - 输出统一 JSON，便于夹具与导出对账。
  */
 import { CAPABILITIES } from './capabilities.js';
-import { sanitizeForHost } from './service.js';
+import { losslessOutput } from './serializer.js';
                                                      
 
 /**
  * 出口硬化：宿主对工具返回值做 lossless-JSON 校验，任何 `undefined` / `NaN` /
  * `Infinity` / 函数 / Map / Set / class 实例都会让整个调用被拒，且错误文本与
- * 真实原因无关。这里统一过一遍 `JSON.stringify` → `JSON.parse`，得到纯 JSON
- * 数据；序列化失败（循环引用、BigInt）时退回服务层归一化，绝不把原始对象
- * 直接交给宿主。
+ * 真实原因无关。这里统一走 `toJsonValue()`（单趟遍历产纯 JSON 树），
+ * 不再做 `JSON.parse(JSON.stringify())` 的往返拷贝。
  */
-function losslessOutput(value         )          {
-  if (value === undefined) return null;
-  try {
-    return JSON.parse(JSON.stringify(value));
-  } catch {
-    return sanitizeForHost(value);
-  }
-}
 
                     
                          

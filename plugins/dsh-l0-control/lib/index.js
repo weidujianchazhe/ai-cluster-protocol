@@ -107,15 +107,43 @@ export function apply(ctx     , rawConfig          = {}) {
   // 只对“已启用本插件”的会话，在 Agent pre-step 裁剪到最近 N 个用户轮次；关闭时原样放行。
   service.installContextGuard?.();
 
-  // 每实例的同名工具（懒建 + 缓存），执行时按会话工作目录路由
-  const instanceTools = new Map                          ();
+  // 每实例的同名工具（懒建 + 缓存 + LRU），执行时按会话工作目录路由
+  const instanceTools = new Map                                                      ();
+  const MAX_TOOLS_CACHE = 100;
+  const TOOLS_CACHE_TTL = 10 * 60 * 1000; // 10 分钟
+
+  const cleanToolsCache = () => {
+    const now = Date.now();
+    for (const [root, entry] of instanceTools.entries()) {
+      if (now - entry.timestamp > TOOLS_CACHE_TTL) {
+        instanceTools.delete(root);
+      }
+    }
+    if (instanceTools.size > MAX_TOOLS_CACHE) {
+      // 删除最旧的
+      let oldestRoot = '';
+      let oldestTime = Infinity;
+      for (const [root, entry] of instanceTools.entries()) {
+        if (entry.timestamp < oldestTime) {
+          oldestTime = entry.timestamp;
+          oldestRoot = root;
+        }
+      }
+      if (oldestRoot) instanceTools.delete(oldestRoot);
+    }
+  };
+
   const toolsFor = (workspaceRoot        ) => {
+    cleanToolsCache(); // 定期清理
     const root = path.resolve(workspaceRoot);
     const cached = instanceTools.get(root);
-    if (cached) return cached;
+    if (cached) {
+      cached.timestamp = Date.now(); // 更新访问时间
+      return cached.map;
+    }
     const instance = pool.get(root);
     const map = new Map             (buildTools(instance).map((tool     ) => [tool.name, tool]));
-    instanceTools.set(root, map);
+    instanceTools.set(root, { map, timestamp: Date.now() });
     return map;
   };
 

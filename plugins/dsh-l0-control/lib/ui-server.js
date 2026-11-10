@@ -342,13 +342,27 @@ export async function startUiServer(options                 )                   
       }
       return;
     }
-    if (path !== '/ui/snapshot' && path !== '/ui/health') {
+    // 轻量健康端点：**不调用 getSnapshot**（否则前端每次探测都要构造一次全量快照）。
+    // 面板用它做「侧车是否可达 / 端口是否就是它」的探测，必须极便宜。
+    if (path === '/ui/health') {
+      send(res, 200, {
+        ok: true,
+        service: 'dsh-l0-control-ui-sidecar',
+        port: (() => {
+          const addr = req.socket?.localPort;
+          return typeof addr === 'number' ? addr : null;
+        })(),
+        at: new Date().toISOString(),
+      });
+      return;
+    }
+    if (path !== '/ui/snapshot') {
       send(res, 404, { ok: false, error: 'not-found', path });
       return;
     }
     try {
       const snapshot = await options.getSnapshot(sessionId, workspaceRoot, sinceSeq);
-      send(res, 200, path === '/ui/health' ? { ok: true, at: new Date().toISOString() } : snapshot);
+      send(res, 200, snapshot);
     } catch (error) {
       send(res, 500, { ok: false, error: 'snapshot-failed', message: String((error         )?.message ?? error) });
     }
