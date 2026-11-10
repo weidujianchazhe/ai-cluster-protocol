@@ -19,7 +19,7 @@ import { resolveActor } from './security/actor.js';
 import { createObservability, instrumentTool } from './observability/index.js';
 import { buildAgentCard, createA2ARouter, startA2AServer } from './a2a/index.js';
 import { createA2ATaskPort } from './wiring/a2a-port.js';
-import { startUiServer } from './ui-server.js';
+import { createUiHandler, startUiServer } from './ui-server.js';
 import { ServicePool } from './workspaces/index.js';
 import path from 'node:path';
 
@@ -29,6 +29,9 @@ export const inject = ['tools'];
 export { Config, CAPABILITIES };
 
 /** 工具名 → 授权动作（未登记的动作在 security 侧默认拒绝）。 */
+/** 同源路由前缀：面板请求 `/l0-control/<endpoint>`，与页面同源。 */
+const SAME_ORIGIN_PREFIX = '/l0-control';
+
 const ACTION_BY_TOOL: Record<string, string> = {
   wish_submit: 'wish.create',
   graph_status: 'graph.read',
@@ -294,6 +297,34 @@ export function apply(ctx: any, rawConfig: unknown = {}) {
   };
 
   /**
+   * **同源路由**（首选通道）：把同一套处理器挂到宿主 webServer 的 `/l0-control` 前缀下。
+   *
+   * 这样面板只需请求相对路径 `/l0-control/...`——与页面同源，没有第二个端口、
+   * 没有跨源判定、没有私有网络预检，插件重载也不会影响页面自身的源。
+   * 宿主没提供 webServer（或注册冲突）时自动退回独立端口侧车。
+   */
+  let disposeSameOrigin: (() => void) | null = null;
+  const webServer = (() => {
+    try {
+      return ctx.get?.('webServer') ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  if (webServer && typeof webServer.register === 'function') {
+    try {
+      const handler = createUiHandler({ ...uiOptions, sameOrigin: true, mountPath: SAME_ORIGIN_PREFIX });
+      disposeSameOrigin = webServer.register({ kind: 'prefix', path: SAME_ORIGIN_PREFIX, handler });
+      service.appendJournal('ui_same_origin_registered', { path: SAME_ORIGIN_PREFIX });
+    } catch (error) {
+      service.appendJournal('ui_same_origin_failed', { error: String((error as Error)?.message ?? error) });
+      disposeSameOrigin = null;
+    }
+  } else {
+    service.appendJournal('ui_same_origin_unavailable', { reason: 'webServer-not-present' });
+  }
+
+  /**
    * 起 UI 服务：首选端口被占时依次试 +1…+7，最后交给系统分配。
    * 只写死一个端口的话，EADDRINUSE 会让服务彻底起不来、面板永久空白，
    * 而且错误只落在 journal 里，从界面上完全看不出来。
@@ -331,6 +362,12 @@ export function apply(ctx: any, rawConfig: unknown = {}) {
   ctx.effect(() => () => {
     // 卸载/disable 时必须释放持久层锁（否则下一世代 open 会 STATE_LOCKED）。
     service.appendJournal('plugin_disposed', { tools: tools.map((tool) => tool.name) });
+    try {
+      disposeSameOrigin?.();
+      disposeSameOrigin = null;
+    } catch {
+      // 释放失败不影响卸载
+    }
     const closing = Promise.all([
       a2aHandle ? a2aHandle.close().catch(() => undefined) : Promise.resolve(undefined),
       uiHandle ? uiHandle.close().catch(() => undefined) : Promise.resolve(undefined),
