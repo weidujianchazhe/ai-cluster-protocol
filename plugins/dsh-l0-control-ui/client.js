@@ -19,8 +19,10 @@ window.__ModuleLoader__.load({
         const def = window.__DSH_L0_CONTROL_UI__ && window.__DSH_L0_CONTROL_UI__.port;
         if (injected) list.push(String(injected));
         if (saved) list.push(String(saved));
-        list.push(`http://127.0.0.1:${Number(def) || DEFAULT_SIDECAR_PORT}`);
-        list.push(`http://127.0.0.1:${DEFAULT_SIDECAR_PORT}`);
+        const basePort = Number(def) || DEFAULT_SIDECAR_PORT;
+        // 服务端在端口被占时会依次试 +1…+7，甚至交给系统分配；
+        // 面板必须把同一批候选都探一遍，否则「换个端口起来」等于没起。
+        for (let i = 0; i < 8; i += 1) list.push(`http://127.0.0.1:${basePort + i}`);
       } catch {
         list.push(`http://127.0.0.1:${DEFAULT_SIDECAR_PORT}`);
       }
@@ -80,12 +82,29 @@ window.__ModuleLoader__.load({
       }
     };
 
-    /** 带超时的请求：服务卡住时不能让面板无限转圈。 */
+    /**
+     * 带超时的请求：服务卡住时不能让面板无限转圈。
+     * 超时/中断必须换成能定位的文字——原样抛 AbortError 时，界面上只会显示
+     * `signal is aborted without reason`，既看不出是哪个地址、也看不出等了多久。
+     */
     const request = async (base, path, init = {}, timeoutMs = 8000) => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      const started = Date.now();
       try {
         return await fetch(`${base}${path}`, { ...init, signal: ctrl.signal });
+      } catch (error) {
+        const elapsed = Date.now() - started;
+        const name = String((error && error.name) || '');
+        if (name === 'AbortError') {
+          const err = new Error(`请求超时：${base}${path}（${elapsed}ms 未响应，超时阈值 ${timeoutMs}ms）`);
+          err.timeout = true;
+          err.url = `${base}${path}`;
+          throw err;
+        }
+        const err = new Error(`请求失败：${base}${path}（${String((error && error.message) || error)}）`);
+        err.url = `${base}${path}`;
+        throw err;
       } finally {
         clearTimeout(timer);
       }
@@ -94,7 +113,15 @@ window.__ModuleLoader__.load({
     /** 统一 GET JSON：自动解析 base、超时、并把失败原因说清楚。 */
     const getJson = async (path, timeoutMs) => {
       const base = await resolveBase();
-      const res = await request(base, path, { headers: { accept: 'application/json' } }, timeoutMs);
+      let res;
+      try {
+        res = await request(base, path, { headers: { accept: 'application/json' } }, timeoutMs);
+      } catch (error) {
+        // 缓存可能指向一个已经死掉的地址：清掉，下一轮自动重新探测
+        resolvedBase = null;
+        try { window.localStorage && window.localStorage.removeItem(BASE_STORAGE_KEY); } catch {}
+        throw error;
+      }
       const json = await res.json().catch(() => null);
       if (!res.ok) {
         const err = new Error((json && (json.error || json.message)) || `HTTP ${res.status}`);
@@ -108,11 +135,18 @@ window.__ModuleLoader__.load({
     /** 统一 POST JSON。 */
     const postJson = async (path, body, timeoutMs = 15000) => {
       const base = await resolveBase();
-      const res = await request(base, path, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
-        body: JSON.stringify(body || {}),
-      }, timeoutMs);
+      let res;
+      try {
+        res = await request(base, path, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(body || {}),
+        }, timeoutMs);
+      } catch (error) {
+        resolvedBase = null;
+        try { window.localStorage && window.localStorage.removeItem(BASE_STORAGE_KEY); } catch {}
+        throw error;
+      }
       const json = await res.json().catch(() => null);
       if (!res.ok && (!json || json.ok !== false)) {
         const err = new Error((json && (json.error || json.message)) || `HTTP ${res.status}`);
@@ -466,6 +500,7 @@ window.__ModuleLoader__.load({
       const [data, setData] = React.useState(null);
       // 黑板增量 cursor（journal 行数）：初始 null → 首次取最近 40
       const cursorRef = React.useRef(null);
+      const failStreakRef = React.useRef(0);
       const [error, setError] = React.useState(null);
       const [loading, setLoading] = React.useState(true);
       const [copiedPath, setCopiedPath] = React.useState(null);
@@ -621,11 +656,17 @@ window.__ModuleLoader__.load({
             return { ...json, blackboard: merged };
           });
           if (typeof json.blackboardCursor === 'number') cursorRef.current = json.blackboardCursor;
+          failStreakRef.current = 0;
           setError(null);
         } catch (e) {
           // 保留 Error 对象：横幅要读 e.probeLog（每个候选地址的结果）。
           // 之前写成 setError(String(e))，属性被拍平，于是只能说"不可达"，等于把诊断信息丢了。
-          setError(e instanceof Error ? e : Object.assign(new Error(String(e?.message || e)), { probeLog: e?.probeLog }));
+          failStreakRef.current += 1;
+          // 插件重载/服务重启会造成 1–2 次瞬时失败（在途请求被 abort）。
+          // 连续失败 2 次以上才提示，避免每次热更新面板都弹一条吓人的红条。
+          if (failStreakRef.current >= 2) {
+            setError(e instanceof Error ? e : Object.assign(new Error(String(e?.message || e)), { probeLog: e?.probeLog }));
+          }
         } finally {
           setLoading(false);
         }
@@ -686,6 +727,7 @@ window.__ModuleLoader__.load({
         error ? h('div', { style: { ...card, marginBottom: 12, borderColor: 'var(--dsw-alias-state-warn-primary)' } },
           h('div', { style: { fontWeight: 600, marginBottom: 6 } }, t('offline')),
           h('div', { style: mono }, String(error?.message || error)),
+          error && error.url ? h('div', { style: { ...mono, ...muted, marginTop: 4 } }, `地址：${error.url}`) : null,
           Array.isArray(error && error.probeLog) && error.probeLog.length
             ? h('div', { style: { ...mono, ...muted, marginTop: 6, whiteSpace: 'pre-wrap' } },
               `探测明细：\n${error.probeLog.join('\n')}`)

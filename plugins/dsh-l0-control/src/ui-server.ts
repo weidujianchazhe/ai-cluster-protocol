@@ -127,6 +127,20 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
 export async function startUiServer(options: UiServerOptions): Promise<UiServerHandle> {
   const host = options.host || '127.0.0.1';
   const port = Number(options.port ?? 47831);
+  /**
+   * 请求计数（path × 来源）：诊断"面板连不上"时，关键问题是**浏览器的请求到底有没有到服务端**。
+   * 只看服务端日志无法区分「没到达」和「到达但被拒」，这个计数器能把两种情况分开：
+   *   - 计数在涨 → 请求到了，问题在响应/跨源；
+   *   - 计数不涨 → 根本没到，问题在客户端/网络策略。
+   */
+  const requestStats: Record<string, { count: number; lastOrigin: string; lastAt: string }> = {};
+  const bump = (key: string, origin: string) => {
+    const row = requestStats[key] ?? { count: 0, lastOrigin: '', lastAt: '' };
+    row.count += 1;
+    row.lastOrigin = origin || '(none)';
+    row.lastAt = new Date().toISOString();
+    requestStats[key] = row;
+  };
   const server = http.createServer(async (req, res) => {
     const method = String(req.method || 'GET').toUpperCase();
     const rawUrl = String(req.url || '/');
@@ -150,6 +164,11 @@ export async function startUiServer(options: UiServerOptions): Promise<UiServerH
     const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
     const origin = allowedOrigin(req, options.allowedOrigins);
     const hasOrigin = rawOrigin.length > 0;
+    if (path === '/ui/stats') {
+      send(res, 200, { ok: true, at: new Date().toISOString(), port, stats: requestStats });
+      return;
+    }
+    bump(`${method} ${path}`, rawOrigin);
     if (hasOrigin && !origin) {
       // 记下**浏览器实际发来的 Origin**：只说 "Failed to fetch" 时，这是唯一能定位的线索。
       try {
