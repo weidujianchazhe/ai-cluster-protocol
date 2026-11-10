@@ -30,33 +30,48 @@ window.__ModuleLoader__.load({
     let resolvedBase = null;
     let resolving = null;
 
-    /** 探测哪个 base 上是我们的面板服务（用 /ui/health，极便宜，不构造快照）。 */
+    /** 最近一次探测的失败明细（给用户看的"试过什么"）。 */
+    let probeLog = [];
+
+    /**
+     * 探测哪个 base 上是我们的面板服务（用 /ui/health，极便宜，不构造快照）。
+     * 判定放宽为「200 + ok:true」：服务名只作加分项——早前版本的健康端点没有
+     * `service` 字段，硬校验会让面板永远连不上。
+     */
     const resolveBase = async () => {
       if (resolvedBase) return resolvedBase;
       if (resolving) return resolving;
       resolving = (async () => {
+        probeLog = [];
         for (const base of baseCandidates()) {
           try {
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 2500);
+            const timer = setTimeout(() => ctrl.abort(), 4000);
             const res = await fetch(`${base}/ui/health`, {
               signal: ctrl.signal,
               headers: { accept: 'application/json' },
             });
             clearTimeout(timer);
-            if (!res.ok) continue;
+            if (!res.ok) {
+              probeLog.push(`${base} → HTTP ${res.status}`);
+              continue;
+            }
             const json = await res.json().catch(() => null);
-            // 认服务名，避免把别的 47831 服务当成面板服务
-            if (json && json.ok === true && String(json.service || '').includes('l0-control')) {
+            if (json && json.ok === true) {
               resolvedBase = base;
+              probeLog.push(`${base} → OK`);
               try { window.localStorage && window.localStorage.setItem(BASE_STORAGE_KEY, base); } catch {}
               return base;
             }
-          } catch {
-            // 该候选不可用，试下一个
+            probeLog.push(`${base} → 非本插件响应`);
+          } catch (error) {
+            const msg = String((error && error.message) || error);
+            probeLog.push(`${base} → ${msg.includes('abort') ? '超时' : msg}`);
           }
         }
-        throw new Error('sidecar-unreachable');
+        const err = new Error('面板服务不可达');
+        err.probeLog = probeLog.slice();
+        throw err;
       })();
       try {
         return await resolving;
@@ -141,6 +156,7 @@ window.__ModuleLoader__.load({
       graphDone: '已完成',
       teamNotCollected: '团队板尚未采集：点「刷新团队统计」让本窗口的 Agent 读一次。',
       switchTarget: '作用对象',
+      enableAlsoCluster: '启用时会一并启用到本工作区（工作区集群），不需要再单独点一次。',
       accessOn: '本对话：已启用',
       accessOff: '本对话：未启用',
       subagents: '递归子 Agent 总数',
@@ -238,6 +254,7 @@ window.__ModuleLoader__.load({
       graphDone: 'Done',
       teamNotCollected: 'Team board not collected yet. Click Refresh team to let this window agent read it once.',
       switchTarget: 'Target',
+      enableAlsoCluster: 'Enabling also turns it on for this workspace, so no separate cluster button is needed.',
       accessOn: 'This conversation: enabled',
       accessOff: 'This conversation: disabled',
       subagents: 'Recursive subagent total',
@@ -510,24 +527,25 @@ window.__ModuleLoader__.load({
           setError(String(e?.message || e));
         }
       };
-      const toggleAccess = (next) => setAccess({ coordination: next });
-      const setManagement = (mode) => setAccess({ management: mode });
-      const enableWorkspaceCluster = async () => {
-        if (!boardWorkspacePath) {
-          setError(t('needSession'));
-          return;
+      /**
+       * 一个开关搞定两件事：本对话启用 + 工作区集群启用。
+       * 原来「启用插件」和「启用工作区集群」是两个按钮，语义重叠、还容易只点一个；
+       * 现在启用时顺带把工作区集群打开（幂等），关闭只关本对话。
+       */
+      const toggleAccess = async (next) => {
+        if (next && !clusterEnabled) {
+          try {
+            await postJson('/ui/cluster-enable', {
+              workspaceRoot: boardWorkspacePath,
+              sessionId: activeSessionId || liveSessionId || data?.sessionId || null,
+            });
+          } catch {
+            // 集群开关失败不阻断本对话启用；下面 setAccess 会给出真实状态
+          }
         }
-        try {
-          const detail = await postJson('/ui/cluster-enable', {
-            workspaceRoot: boardWorkspacePath,
-            sessionId: activeSessionId || liveSessionId || data?.sessionId || null,
-          });
-          if (detail?.ok === false) throw new Error(detail.error || 'cluster-enable-failed');
-          await load();
-        } catch (e) {
-          setError(String(e?.message || e));
-        }
+        await setAccess({ coordination: next });
       };
+      const setManagement = (mode) => setAccess({ management: mode });
       // 新建项目表单（用当前选中工作区）
       const refreshTeam = async () => {
         const target = activeSessionId || liveSessionId || data?.sessionId || null;
@@ -663,9 +681,15 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', style: button, onClick: checkUpdate }, t('checkUpdate')),
             h('button', { type: 'button', style: button, onClick: () => ctx.layout.selectPanel('plugins') }, t('plugins')))),
 
-        error ? h('div', { style: { ...card, borderColor: 'var(--dsw-alias-state-warn-primary)' } },
+        error ? h('div', { style: { ...card, marginBottom: 12, borderColor: 'var(--dsw-alias-state-warn-primary)' } },
           h('div', { style: { fontWeight: 600, marginBottom: 6 } }, t('offline')),
-          h('div', { style: mono }, error)) : null,
+          h('div', { style: mono }, error),
+          Array.isArray(error && error.probeLog) && error.probeLog.length
+            ? h('div', { style: { ...mono, ...muted, marginTop: 6, whiteSpace: 'pre-wrap' } },
+              `探测明细：\n${error.probeLog.join('\n')}`)
+            : null,
+          h('div', { style: { ...muted, marginTop: 6 } },
+            '排查：① 确认 dsh-l0-control 插件为启用；② 若改过 uiPort，把它告诉面板；③ 端口 47831 是否被别的程序占用。')) : null,
 
         h('div', { style: { display: 'flex', gap: 8, flexWrap: 'nowrap', overflowX: 'auto', alignItems: 'center', margin: '0 0 12px', paddingBottom: 2 } },
           h('span', { style: { ...muted, whiteSpace: 'nowrap' } }, t('workSpaces')),
@@ -710,24 +734,22 @@ window.__ModuleLoader__.load({
         coordinationEnabled && !sessionAttached ? h('div', { style: { ...muted, marginTop: -4, marginBottom: 8 } }, t('noSessionSnapshot')) : null,
 
         // 两块分开：左边事实源，右边插件开关（只控制协作）
-        h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1.6fr) minmax(240px, .9fr)', gap: 12, marginTop: 12 } },
-          h('div', { style: { ...card, margin: 0, padding: '8px 12px' } },
-            h('div', { style: { display: 'flex', gap: 8, alignItems: 'baseline', minWidth: 0 } },
-              h('span', { style: { ...sectionTitle, margin: 0 } }, t('source')),
-              h('span', { style: { ...muted, ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, t('sourceValue'))),
-            counts ? h('div', { style: { ...muted, ...mono, marginTop: 4 } }, `${counts.nodes ?? 0} nodes · ${counts.done ?? 0} done`) : null,
-            h('div', { style: { ...muted, marginTop: 4 } }, clusterEnabled ? t('clusterEnabled') : t('clusterDisabled')),
-            !clusterEnabled && boardWorkspacePath ? h('button', {
-              type: 'button',
-              style: { ...button, marginTop: 6, fontSize: 12, padding: '2px 8px' },
-              onClick: enableWorkspaceCluster,
-            }, t('enableCluster')) : null),
+        h('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(260px, .9fr)', gap: 12, marginTop: 12, alignItems: 'start' } },
+          // 左：事实与计数（紧凑，不留大片空白）
+          h('div', { style: { ...card, margin: 0, padding: '10px 12px', alignSelf: 'start' } },
+            h('div', { style: { ...sectionTitle, margin: 0 } }, t('source')),
+            h('div', { style: { ...muted, marginTop: 2 } }, t('sourceValue')),
+            h('div', { style: { ...mono, ...muted, marginTop: 6 } },
+              `${t('graphNodes')} ${counts?.nodes ?? 0} · ${t('graphDone')} ${counts?.done ?? 0} · ${t('ready')} ${graphEmpty ? 0 : ready.length}`),
+            h('div', { style: { ...mono, ...muted, marginTop: 2 } },
+              `${t('events')} ${data?.journal?.events ?? 0} · ${t('subagents')} ${descendantsSource === 'none' ? '—' : (data?.descendants?.count ?? 0)}`),
+            h('div', { style: { ...mono, ...muted, marginTop: 2, overflowWrap: 'anywhere' } }, String(data?.stateDir || '')),
+            h('div', { style: { ...muted, marginTop: 6 } }, clusterEnabled ? t('clusterEnabled') : t('clusterDisabled'))),
 
-          // 控制区：三组开关 + 作用对象，全部**始终可见可点**（不再等 team_status）
-          h('div', { style: { ...card, margin: 0, padding: '10px 12px' } },
+          // 右：控制区——**一个开关**（启用/关闭）+ 管理三态，避免两个"启用"让人分不清
+          h('div', { style: { ...card, margin: 0, padding: '10px 12px', alignSelf: 'start' } },
             h('div', { style: { ...muted, ...mono, marginBottom: 6 } },
               `${t('switchTarget')}: ${activeSessionId ? sessionLabel(sessionById.get(activeSessionId)) : '—'}`),
-            // ① 插件开关（本对话）
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 } },
               h('div', null,
                 h('div', { style: { ...sectionTitle, margin: 0 } }, t('pluginSwitch')),
@@ -737,17 +759,7 @@ window.__ModuleLoader__.load({
                 style: { ...button, ...(coordinationEnabled ? selectedButton : {}) },
                 onClick: () => toggleAccess(!coordinationEnabled),
               }, coordinationEnabled ? t('disablePlugin') : t('enablePlugin'))),
-            // ② 工作区集群
-            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
-              h('div', null,
-                h('div', { style: { ...sectionTitle, margin: 0 } }, t('clusterLabel')),
-                h('div', { style: { ...muted, marginTop: 3 } }, clusterEnabled ? t('clusterEnabled') : t('clusterDisabled'))),
-              clusterEnabled ? null : h('button', {
-                type: 'button',
-                style: button,
-                onClick: enableWorkspaceCluster,
-              }, t('enableCluster'))),
-            // ③ 工作区管理三态
+            clusterEnabled ? null : h('div', { style: { ...muted, marginTop: 4 } }, t('enableAlsoCluster')),
             h('div', { style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
               h('div', { style: { ...sectionTitle, margin: 0 } }, t('managementSwitch')),
               h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
@@ -758,8 +770,7 @@ window.__ModuleLoader__.load({
                     style: { ...button, ...(managementMode === mode ? selectedButton : {}) },
                     onClick: () => setManagement(mode),
                   }, label))),
-              h('div', { style: { ...muted, marginTop: 4 } }, t('mgmtSwitchHint'))),
-            h('div', { style: { ...muted, marginTop: 6 } }, t('pluginSwitchHint')))),
+              h('div', { style: { ...muted, marginTop: 4 } }, t('mgmtSwitchHint'))))),
 
         h('div', { style: tabRow }, tabs.map(([id, label]) =>
           h('button', { key: id, type: 'button', style: tabStyle(tab === id), onClick: () => setTab(id) }, label))),

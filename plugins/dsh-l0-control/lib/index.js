@@ -263,6 +263,8 @@ export function apply(ctx     , rawConfig          = {}) {
       pool.clusterFor(workspaceRoot ?? service.workspaceRoot),
     getAgents: (workspaceRoot         ) =>
       pool.get(workspaceRoot ?? service.workspaceRoot).buildAgentRoster(),
+    onRejectedOrigin: (info                                                  ) =>
+      service.appendJournal('ui_origin_rejected', info),
     enableCluster: (input                                                ) =>
       pool.enableCluster(input?.workspaceRoot ?? service.workspaceRoot, input?.sessionId ?? null),
     setAccess: (input                                                                                                                            ) =>

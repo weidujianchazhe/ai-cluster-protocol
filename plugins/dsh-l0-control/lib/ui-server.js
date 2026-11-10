@@ -25,6 +25,8 @@ import http from 'node:http';
                                                    
                                                        
                                                   
+                                            
+                                                                                      
                                     
                                                                                      
                                                                               
@@ -80,6 +82,10 @@ function allowedOrigin(req                      , extraOrigins                  
   const origin = req.headers.origin;
   if (typeof origin !== 'string' || !origin) return undefined;
   if (Array.isArray(extraOrigins) && extraOrigins.includes(origin)) return origin;
+  // opaque origin：面板若跑在 file:// 或 sandboxed iframe 里，浏览器会发字面量 `null`。
+  // 服务只绑 127.0.0.1，所以这类来源仍是"本机页面"；响应 ACAO 必须原样回 `null`，
+  // 回 `*` 或具体 origin 都不会被浏览器接受。不认这条，面板就永远 sidecar-unreachable。
+  if (origin === 'null') return 'null';
   return parseLoopbackOrigin(origin);
 }
 
@@ -132,8 +138,17 @@ export async function startUiServer(options                 )                   
       workspaceRoot = undefined;
       sinceSeq = undefined;
     }
+    const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
     const origin = allowedOrigin(req, options.allowedOrigins);
-    const hasOrigin = typeof req.headers.origin === 'string' && req.headers.origin.length > 0;
+    const hasOrigin = rawOrigin.length > 0;
+    if (hasOrigin && !origin) {
+      // 记下**浏览器实际发来的 Origin**：只说 "Failed to fetch" 时，这是唯一能定位的线索。
+      try {
+        options.onRejectedOrigin?.({ origin: rawOrigin, path, method });
+      } catch {
+        // 诊断失败不影响主流程
+      }
+    }
     // Chromium 的「本地网络访问」策略：页面去请求 127.0.0.1 上的另一个端口时，
     // 预检会带 `Access-Control-Request-Private-Network: true`，服务端必须回
     // `Access-Control-Allow-Private-Network: true`，否则浏览器直接判失败——
@@ -141,7 +156,7 @@ export async function startUiServer(options                 )                   
     const wantsPrivateNetwork = String(req.headers['access-control-request-private-network'] ?? '').toLowerCase() === 'true';
     if (method === 'OPTIONS') {
       if (!origin) {
-        send(res, 403, { ok: false, error: 'origin-forbidden' });
+        send(res, 403, { ok: false, error: 'origin-forbidden', origin: rawOrigin || null });
         return;
       }
       const headers                                  = {
@@ -157,7 +172,7 @@ export async function startUiServer(options                 )                   
     }
     // Origin 白名单校验：带 Origin 但不在白名单 → 403；POST 必须带白名单 Origin（无 Origin 视为跨站，拒绝）。
     if ((hasOrigin && !origin) || (method === 'POST' && !origin)) {
-      send(res, 403, { ok: false, error: 'origin-forbidden' });
+      send(res, 403, { ok: false, error: 'origin-forbidden', origin: rawOrigin || null });
       return;
     }
     if (origin) {
