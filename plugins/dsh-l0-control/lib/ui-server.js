@@ -124,9 +124,23 @@ function send(res                     , status        , body         )       {
   res.end(text);
 }
 
-export async function startUiServer(options                 )                          {
-  const host = options.host || '127.0.0.1';
-  const port = Number(options.port ?? 47831);
+/**
+ * 纯请求处理器（不绑端口）。
+ *
+ * 为什么要抽出来：面板原来只能跨源连一个独立端口，链路上任何一环（端口占用/跨源策略/
+ * 自定义协议/私有网络）都会断。宿主提供 `webServer.register()`，可以把同一套处理器
+ * 挂到**页面自己的源**上（`/l0-control/*`），于是跨源问题从根上消失。
+ *
+ * `sameOrigin: true` 时跳过来源校验并省略 CORS 头——请求本来就来自同源页面，
+ * 再按 Origin 白名单卡一遍只会误伤（同源 POST 的 Origin 形态不固定）。
+ */
+export function createUiHandler(
+  options                                                                ,
+) {
+  const sameOrigin = options.sameOrigin === true;
+  // 挂载前缀：宿主路由 `/l0-control` 下，把 `/l0-control/health` 映射回内部 `/ui/health`，
+  // 这样同一套路由表既能给独立端口用，也能给同源前缀用，不必维护两份。
+  const mountPath = typeof options.mountPath === 'string' && options.mountPath ? options.mountPath.replace(/\/$/, '') : '';
   /**
    * 请求计数（path × 来源）：诊断"面板连不上"时，关键问题是**浏览器的请求到底有没有到服务端**。
    * 只看服务端日志无法区分「没到达」和「到达但被拒」，这个计数器能把两种情况分开：
@@ -141,10 +155,14 @@ export async function startUiServer(options                 )                   
     row.lastAt = new Date().toISOString();
     requestStats[key] = row;
   };
-  const server = http.createServer(async (req, res) => {
+  return async function handle(req                      , res                     )                {
     const method = String(req.method || 'GET').toUpperCase();
     const rawUrl = String(req.url || '/');
-    const path = rawUrl.split('?')[0];
+    const rawPath = rawUrl.split('?')[0];
+    let path = rawPath;
+    if (mountPath && rawPath.startsWith(mountPath)) {
+      path = `/ui${rawPath.slice(mountPath.length) || '/health'}`;
+    }
     let sessionId                    ;
     let workspaceRoot                    ;
     let sinceSeq                    ;
@@ -165,49 +183,54 @@ export async function startUiServer(options                 )                   
     const origin = allowedOrigin(req, options.allowedOrigins);
     const hasOrigin = rawOrigin.length > 0;
     if (path === '/ui/stats') {
-      send(res, 200, { ok: true, at: new Date().toISOString(), port, stats: requestStats });
+      send(res, 200, { ok: true, at: new Date().toISOString(), port: req.socket?.localPort ?? null, stats: requestStats });
       return;
     }
     bump(`${method} ${path}`, rawOrigin);
-    if (hasOrigin && !origin) {
-      // 记下**浏览器实际发来的 Origin**：只说 "Failed to fetch" 时，这是唯一能定位的线索。
-      try {
-        options.onRejectedOrigin?.({ origin: rawOrigin, path, method });
-      } catch {
-        // 诊断失败不影响主流程
+    // sameOrigin（挂在宿主 webServer 的同源路由）：请求本来就来自页面自身，
+    // 跨源校验与 CORS 头全部跳过——同源 POST 的 Origin 形态不固定，按白名单卡只会误伤。
+    if (!sameOrigin) {
+      if (hasOrigin && !origin) {
+        // 记下**浏览器实际发来的 Origin**：只说 "Failed to fetch" 时，这是唯一能定位的线索。
+        try {
+          options.onRejectedOrigin?.({ origin: rawOrigin, path, method });
+        } catch {
+          // 诊断失败不影响主流程
+        }
       }
-    }
-    // Chromium 的「本地网络访问」策略：页面去请求 127.0.0.1 上的另一个端口时，
-    // 预检会带 `Access-Control-Request-Private-Network: true`，服务端必须回
-    // `Access-Control-Allow-Private-Network: true`，否则浏览器直接判失败——
-    // 表现就是面板报 Failed to fetch，而用 node/curl 测同一个 URL 却是 200。
-    const wantsPrivateNetwork = String(req.headers['access-control-request-private-network'] ?? '').toLowerCase() === 'true';
-    if (method === 'OPTIONS') {
-      if (!origin) {
+      // Chromium 的「本地网络访问」策略：页面去请求 127.0.0.1 上的另一个端口时，
+      // 预检会带 `Access-Control-Request-Private-Network: true`，服务端必须回
+      // `Access-Control-Allow-Private-Network: true`，否则浏览器直接判失败——
+      // 表现就是面板报 Failed to fetch，而用 node/curl 测同一个 URL 却是 200。
+      const wantsPrivateNetwork = String(req.headers['access-control-request-private-network'] ?? '').toLowerCase() === 'true';
+      if (method === 'OPTIONS') {
+        if (!origin) {
+          send(res, 403, { ok: false, error: 'origin-forbidden', origin: rawOrigin || null });
+          return;
+        }
+        const headers                                  = {
+          'access-control-allow-origin': origin,
+          'access-control-allow-methods': 'GET, POST, OPTIONS',
+          'access-control-allow-headers': 'content-type, accept',
+          vary: 'Origin',
+        };
+        if (wantsPrivateNetwork) headers['access-control-allow-private-network'] = 'true';
+        res.writeHead(204, headers);
+        res.end();
+        return;
+      }
+      // Origin 白名单校验：带 Origin 但不在白名单 → 403；POST 必须带白名单 Origin（无 Origin 视为跨站，拒绝）。
+      if ((hasOrigin && !origin) || (method === 'POST' && !origin)) {
         send(res, 403, { ok: false, error: 'origin-forbidden', origin: rawOrigin || null });
         return;
       }
-      const headers                                  = {
-        'access-control-allow-origin': origin,
-        'access-control-allow-methods': 'GET, POST, OPTIONS',
-        'access-control-allow-headers': 'content-type, accept',
-        vary: 'Origin',
-      };
-      if (wantsPrivateNetwork) headers['access-control-allow-private-network'] = 'true';
-      res.writeHead(204, headers);
-      res.end();
-      return;
+      if (origin) {
+        res.setHeader('access-control-allow-origin', origin);
+        res.setHeader('vary', 'Origin');
+        if (wantsPrivateNetwork) res.setHeader('access-control-allow-private-network', 'true');
+      }
     }
-    // Origin 白名单校验：带 Origin 但不在白名单 → 403；POST 必须带白名单 Origin（无 Origin 视为跨站，拒绝）。
-    if ((hasOrigin && !origin) || (method === 'POST' && !origin)) {
-      send(res, 403, { ok: false, error: 'origin-forbidden', origin: rawOrigin || null });
-      return;
-    }
-    if (origin) {
-      res.setHeader('access-control-allow-origin', origin);
-      res.setHeader('vary', 'Origin');
-      if (wantsPrivateNetwork) res.setHeader('access-control-allow-private-network', 'true');
-    }
+
     // GET /ui/cluster：工作区集群状态
     if (method === 'GET' && path === '/ui/cluster') {
       if (typeof options.getCluster !== 'function') {
@@ -425,7 +448,13 @@ export async function startUiServer(options                 )                   
     } catch (error) {
       send(res, 500, { ok: false, error: 'snapshot-failed', message: String((error         )?.message ?? error) });
     }
-  });
+  };
+}
+
+export async function startUiServer(options                 )                          {
+  const host = options.host || '127.0.0.1';
+  const port = Number(options.port ?? 47831);
+  const server = http.createServer(createUiHandler(options));
   await new Promise      ((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => resolve());

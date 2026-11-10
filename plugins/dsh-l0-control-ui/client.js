@@ -9,10 +9,17 @@ window.__ModuleLoader__.load({
     // 面板服务端口是**可配置的**（cfg.uiPort，默认 47831）。写死会在改端口后整套请求
     // 落到 `Failed to fetch`，且错误看起来像"没启动"，排查方向被完全带偏。
     // 策略：注入值/上次成功的值 → 默认端口 → 候选探测；成功后记进 localStorage。
+    // 首选通道：宿主 webServer 上的同源前缀 `/l0-control`（与页面同源，无跨源、无第二端口）。
+    // 只有宿主没有该路由时（老版本/未注册），才回退到独立端口探测。
+    const SAME_ORIGIN_PREFIX = '/l0-control';
+    /** base === '' 表示同源：把内部路径 `/ui/snapshot` 映射成 `/l0-control/snapshot`。 */
+    const toUrl = (base, path) => (base === ''
+      ? `${SAME_ORIGIN_PREFIX}${String(path).replace(/^\/ui/, '')}`
+      : `${base}${path}`);
     const DEFAULT_SIDECAR_PORT = 47831;
     const BASE_STORAGE_KEY = 'l0-control-ui.base';
     const baseCandidates = () => {
-      const list = [];
+      const list = [''];
       try {
         const injected = (window.__DSH_L0_CONTROL_UI__ && window.__DSH_L0_CONTROL_UI__.baseUrl) || null;
         const saved = window.localStorage ? window.localStorage.getItem(BASE_STORAGE_KEY) : null;
@@ -49,7 +56,7 @@ window.__ModuleLoader__.load({
           try {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), 4000);
-            const res = await fetch(`${base}/ui/health`, {
+            const res = await fetch(toUrl(base, '/ui/health'), {
               signal: ctrl.signal,
               headers: { accept: 'application/json' },
             });
@@ -92,18 +99,18 @@ window.__ModuleLoader__.load({
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       const started = Date.now();
       try {
-        return await fetch(`${base}${path}`, { ...init, signal: ctrl.signal });
+        return await fetch(toUrl(base, path), { ...init, signal: ctrl.signal });
       } catch (error) {
         const elapsed = Date.now() - started;
         const name = String((error && error.name) || '');
         if (name === 'AbortError') {
-          const err = new Error(`请求超时：${base}${path}（${elapsed}ms 未响应，超时阈值 ${timeoutMs}ms）`);
+          const err = new Error(`请求超时：${toUrl(base, path)}（${elapsed}ms 未响应，超时阈值 ${timeoutMs}ms）`);
           err.timeout = true;
-          err.url = `${base}${path}`;
+          err.url = toUrl(base, path);
           throw err;
         }
-        const err = new Error(`请求失败：${base}${path}（${String((error && error.message) || error)}）`);
-        err.url = `${base}${path}`;
+        const err = new Error(`请求失败：${toUrl(base, path)}（${String((error && error.message) || error)}）`);
+        err.url = toUrl(base, path);
         throw err;
       } finally {
         clearTimeout(timer);

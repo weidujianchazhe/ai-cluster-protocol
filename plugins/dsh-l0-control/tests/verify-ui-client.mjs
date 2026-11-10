@@ -38,4 +38,9 @@ assert.ok(!/run wish_submit first/.test(src), '英文提示仍在说 wish_submit
 // 5) 离线提示可诊断（提到端口/探测）
 assert.ok(/探测|probed/.test(src), '离线提示未说明"已探测端口"');
 
+// 6) 同源通道优先：必须先试 /l0-control，而不是一上来就跨源
+assert.ok(src.includes("'/l0-control'"), '缺少同源前缀常量');
+assert.ok(/const list = \[''\]/.test(src), '同源必须是第一个候选（否则又回到跨源不稳定）');
+assert.ok(src.includes('fetch(toUrl(base'), '请求必须经 toUrl 拼装，确保同源与回环两种 base 都正确');
+
 console.log('PASS ui-client: 5/5（无写死端口 / 健康探测 / 统一请求 / 文案 / 可诊断）');
