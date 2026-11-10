@@ -761,18 +761,7 @@ window.__ModuleLoader__.load({
                 style: { ...button, ...(coordinationEnabled ? selectedButton : {}) },
                 onClick: () => toggleAccess(!coordinationEnabled),
               }, coordinationEnabled ? t('disablePlugin') : t('enablePlugin'))),
-            clusterEnabled ? null : h('div', { style: { ...muted, marginTop: 4 } }, t('enableAlsoCluster')),
-            h('div', { style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
-              h('div', { style: { ...sectionTitle, margin: 0 } }, t('managementSwitch')),
-              h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
-                [['off', t('mgmtOff')], ['auto', t('mgmtAuto')], ['on', t('mgmtOn')]].map(([mode, label]) =>
-                  h('button', {
-                    key: mode,
-                    type: 'button',
-                    style: { ...button, ...(managementMode === mode ? selectedButton : {}) },
-                    onClick: () => setManagement(mode),
-                  }, label))),
-              h('div', { style: { ...muted, marginTop: 4 } }, t('mgmtSwitchHint'))))),
+            clusterEnabled ? null : h('div', { style: { ...muted, marginTop: 4 } }, t('enableAlsoCluster')))),
 
         h('div', { style: tabRow }, tabs.map(([id, label]) =>
           h('button', { key: id, type: 'button', style: tabStyle(tab === id), onClick: () => setTab(id) }, label))),
