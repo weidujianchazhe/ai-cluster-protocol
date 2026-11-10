@@ -623,7 +623,9 @@ window.__ModuleLoader__.load({
           if (typeof json.blackboardCursor === 'number') cursorRef.current = json.blackboardCursor;
           setError(null);
         } catch (e) {
-          setError(String(e?.message || e));
+          // 保留 Error 对象：横幅要读 e.probeLog（每个候选地址的结果）。
+          // 之前写成 setError(String(e))，属性被拍平，于是只能说"不可达"，等于把诊断信息丢了。
+          setError(e instanceof Error ? e : Object.assign(new Error(String(e?.message || e)), { probeLog: e?.probeLog }));
         } finally {
           setLoading(false);
         }
@@ -683,7 +685,7 @@ window.__ModuleLoader__.load({
 
         error ? h('div', { style: { ...card, marginBottom: 12, borderColor: 'var(--dsw-alias-state-warn-primary)' } },
           h('div', { style: { fontWeight: 600, marginBottom: 6 } }, t('offline')),
-          h('div', { style: mono }, error),
+          h('div', { style: mono }, String(error?.message || error)),
           Array.isArray(error && error.probeLog) && error.probeLog.length
             ? h('div', { style: { ...mono, ...muted, marginTop: 6, whiteSpace: 'pre-wrap' } },
               `探测明细：\n${error.probeLog.join('\n')}`)

@@ -65,7 +65,15 @@ const JSON_TYPE = 'application/json; charset=utf-8';
  */
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '[::1]', '::1']);
 
-/** 解析 Origin；非 `http(s)` / 解析失败 / 非回环 host → undefined。 */
+/**
+ * 桌面端自定义协议：DSH 应用把页面跑在 `dsh-app://app` 下（Electron 自定义 scheme）。
+ * 它既不是 `null`（sandboxed iframe），也不是 http 回环——只认后两者会让面板**永久**连不上，
+ * 且表现为 "Failed to fetch / sidecar-unreachable"，从错误里完全看不出是 Origin 被拒。
+ * 实测（2026-11-10）：journal 里 ui_origin_rejected 的 origin 就是 `dsh-app://app`。
+ */
+const APP_SCHEMES = new Set(['dsh-app:', 'dsh-app-web:', 'app:']);
+
+/** 解析 Origin；自定义应用协议 / http(s) 回环 → 原样返回；其余 undefined。 */
 function parseLoopbackOrigin(origin: string): string | undefined {
   let url: URL;
   try {
@@ -73,6 +81,7 @@ function parseLoopbackOrigin(origin: string): string | undefined {
   } catch {
     return undefined;
   }
+  if (APP_SCHEMES.has(url.protocol)) return origin;
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
   const hostname = url.hostname.toLowerCase();
   return LOOPBACK_HOSTS.has(hostname) ? origin : undefined;
