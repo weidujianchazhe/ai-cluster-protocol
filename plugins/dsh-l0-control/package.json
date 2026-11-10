@@ -23,7 +23,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "verify": "node scripts/build.mjs --check && node scripts/typecheck.mjs && node tests/verify-serializer.mjs && node tests/verify-ui-client.mjs",
+    "verify": "node scripts/build.mjs --check && node scripts/typecheck.mjs && node tests/verify-serializer.mjs && node tests/verify-ui-client.mjs && node tests/verify-actor.mjs",
     "selftest": "node scripts/selftest.mjs",
     "contract": "node scripts/contract.mjs",
     "persistence": "node scripts/persistence-check.mjs",

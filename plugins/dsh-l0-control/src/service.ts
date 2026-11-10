@@ -1194,6 +1194,163 @@ export class L0ControlService {
   }
 
   /**
+   * 从 journal 折叠出**智能体花名册**（只读，不依赖 team_status / 活 Agent）。
+   *
+   * 为什么需要：面板原来的"多少个 agent / 各自在干什么"全押在 `team_status` 上——
+   * 而那要求**有活 Agent 主动调一次**，没人调就永远显示 `—`，面板看起来像摆设。
+   * journal 里本来就有 `agent_spawned` / `task_claimed` / `evidence_submitted` /
+   * `verify_done_*` / `task_heartbeat_*`，够还原：谁被派出来、领了哪个节点、
+   * 交没交证据、最后活跃在什么时候。
+   */
+  buildAgentRoster(): {
+    ok: boolean;
+    total: number;
+    running: number;
+    idle: number;
+    withLease: number;
+    byRole: Record<string, number>;
+    items: Array<Record<string, unknown>>;
+    generatedAt: string;
+  } {
+    interface Entry {
+      instanceId: string;
+      role: string | null;
+      label: string | null;
+      sessionId: string | null;
+      parentSessionId: string | null;
+      spawnedAt: string | null;
+      lastSeen: string | null;
+      lastEvent: string | null;
+      nodes: string[];
+      currentNode: string | null;
+      claimedAt: string | null;
+      evidenceCount: number;
+      doneCount: number;
+      heartbeatAt: string | null;
+      heartbeatFailed: boolean;
+    }
+    const roster = new Map<string, Entry>();
+    const ensure = (instanceId: string): Entry => {
+      const id = String(instanceId);
+      let entry = roster.get(id);
+      if (!entry) {
+        entry = {
+          instanceId: id,
+          role: roleOfInstance(id),
+          label: null,
+          sessionId: null,
+          parentSessionId: null,
+          spawnedAt: null,
+          lastSeen: null,
+          lastEvent: null,
+          nodes: [],
+          currentNode: null,
+          claimedAt: null,
+          evidenceCount: 0,
+          doneCount: 0,
+          heartbeatAt: null,
+          heartbeatFailed: false,
+        };
+        roster.set(id, entry);
+      }
+      return entry;
+    };
+    const touch = (entry: Entry, at: string | null, kind: string) => {
+      if (at && (!entry.lastSeen || at > entry.lastSeen)) entry.lastSeen = at;
+      entry.lastEvent = kind;
+    };
+
+    let rows: Record<string, unknown>[] = [];
+    try {
+      rows = this.readJournal();
+    } catch {
+      rows = [];
+    }
+    for (const row of rows) {
+      const kind = String(row?.kind ?? '');
+      const at = row?.at ? String(row.at) : null;
+      const nodeId = row?.nodeId ? String(row.nodeId) : row?.node_id ? String(row.node_id) : null;
+      if (kind === 'agent_spawned') {
+        const instanceId = row?.instanceId ? String(row.instanceId) : '';
+        if (!instanceId) continue;
+        const entry = ensure(instanceId);
+        entry.label = row?.label ? String(row.label) : entry.label;
+        entry.sessionId = row?.sessionId ? String(row.sessionId) : entry.sessionId;
+        entry.parentSessionId = row?.parentSessionId ? String(row.parentSessionId) : entry.parentSessionId;
+        entry.spawnedAt = at;
+        entry.role = entry.role ?? (row?.role ? String(row.role) : null);
+        touch(entry, at, kind);
+        continue;
+      }
+      const actor =
+        (row?.instanceId ? String(row.instanceId) : null) ??
+        (row?.producer_instance ? String(row.producer_instance) : null) ??
+        (row?.auditor_instance ? String(row.auditor_instance) : null);
+      if (!actor || !roleOfInstance(actor)) continue;
+
+      if (kind === 'task_claimed') {
+        const entry = ensure(actor);
+        entry.currentNode = nodeId;
+        entry.claimedAt = at;
+        if (nodeId && !entry.nodes.includes(nodeId)) entry.nodes.push(nodeId);
+        touch(entry, at, kind);
+      } else if (kind === 'task_heartbeat_ok' || kind === 'task_heartbeat_failed') {
+        const entry = ensure(actor);
+        entry.heartbeatAt = at;
+        entry.heartbeatFailed = kind === 'task_heartbeat_failed';
+        touch(entry, at, kind);
+      } else if (kind === 'evidence_submitted') {
+        const entry = ensure(actor);
+        entry.evidenceCount += 1;
+        touch(entry, at, kind);
+      } else if (kind === 'verify_done_requested' || kind === 'verify_done_rejected') {
+        const entry = ensure(actor);
+        if (kind === 'verify_done_requested') entry.doneCount += 1;
+        touch(entry, at, kind);
+      }
+    }
+
+    const items = [...roster.values()].map((entry) => {
+      const role = entry.role ?? 'UNKNOWN';
+      // 活跃判定：有当前节点 = running（领了活没交完）；否则 idle。
+      const activity = entry.currentNode ? 'running' : 'idle';
+      return {
+        instanceId: entry.instanceId,
+        role,
+        label: entry.label,
+        sessionId: entry.sessionId,
+        parentSessionId: entry.parentSessionId,
+        activity,
+        currentNode: entry.currentNode,
+        claimedAt: entry.claimedAt,
+        nodes: entry.nodes.slice(-10),
+        evidenceCount: entry.evidenceCount,
+        doneCount: entry.doneCount,
+        spawnedAt: entry.spawnedAt,
+        lastSeen: entry.lastSeen,
+        lastEvent: entry.lastEvent,
+        heartbeatAt: entry.heartbeatAt,
+        heartbeatFailed: entry.heartbeatFailed,
+      };
+    });
+    items.sort((a, b) => String(b.lastSeen ?? '').localeCompare(String(a.lastSeen ?? '')) || a.instanceId.localeCompare(b.instanceId));
+
+    const byRole: Record<string, number> = {};
+    for (const item of items) byRole[item.role] = (byRole[item.role] ?? 0) + 1;
+    const running = items.filter((item) => item.activity === 'running').length;
+    return {
+      ok: true,
+      total: items.length,
+      running,
+      idle: items.length - running,
+      withLease: items.filter((item) => Boolean(item.currentNode)).length,
+      byRole,
+      items,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
    * 只读 UI 快照（侧车专用，不参与决策）。
    *
    * **按对话窗口（session）隔离**：`uiSnapshot({sessionId})` 只返回该 session 的团队板；
@@ -1412,6 +1569,24 @@ export class L0ControlService {
       journal: this.journalSummary(),
       team,
       descendants,
+      /** 花名册：从 journal 折叠，不依赖 team_status 与活 Agent。 */
+      agents: (() => {
+        try {
+          return this.buildAgentRoster();
+        } catch (error) {
+          return {
+            ok: false,
+            total: 0,
+            running: 0,
+            idle: 0,
+            withLease: 0,
+            byRole: {},
+            items: [],
+            generatedAt: new Date().toISOString(),
+            error: String((error as Error)?.message ?? error),
+          };
+        }
+      })(),
       graph: coreGraph ? {
         version: coreGraph.version ?? null,
         ready: coreGraph.ready ?? [],
@@ -1828,6 +2003,7 @@ export class L0ControlService {
   async spawnAgent(input: {
     role: string;
     task: string;
+    /** —— 扁平写法（兼容旧调用，优先级低于分组） —— */
     index?: number;
     label?: string;
     maxDepth?: number;
@@ -1839,7 +2015,40 @@ export class L0ControlService {
     contextPack?: string[];
     heartbeatTtlSec?: number;
     worker?: { enabled?: boolean; capability?: string; contextPack?: string[]; maxIterations?: number; heartbeatTtlSec?: number };
+    /** —— 分组写法：把"这个 agent 是谁/带什么包"和"走哪条通道"分开 —— */
+    agent?: {
+      preset?: string;
+      capability?: string;
+      contextPack?: string[];
+      cwd?: string;
+      maxDepth?: number;
+      label?: string;
+      index?: number;
+      heartbeatTtlSec?: number;
+    };
+    transport?: {
+      via?: 'auto' | 'team' | 'activation' | 'provider';
+      provider?: string;
+    };
   }, caller?: any) {
+    // 分组参数摊平：`agent.*` / `transport.*` 覆盖同名扁平字段（分组是"更明确的意图"）。
+    // 保留扁平写法不动，老调用方零改动。
+    if (input?.agent && typeof input.agent === 'object') {
+      const a = input.agent;
+      if (a.preset !== undefined) input.agentPreset = a.preset;
+      if (a.capability !== undefined) input.capability = a.capability;
+      if (a.contextPack !== undefined) input.contextPack = a.contextPack;
+      if (a.cwd !== undefined) input.cwd = a.cwd;
+      if (a.maxDepth !== undefined) input.maxDepth = a.maxDepth;
+      if (a.label !== undefined) input.label = a.label;
+      if (a.index !== undefined) input.index = a.index;
+      if (a.heartbeatTtlSec !== undefined) input.heartbeatTtlSec = a.heartbeatTtlSec;
+    }
+    if (input?.transport && typeof input.transport === 'object') {
+      const t = input.transport;
+      if (t.via !== undefined) input.via = t.via;
+      if (t.provider !== undefined) input.provider = t.provider;
+    }
     // 能力包可以在顶层或 worker 子对象里给（顶层写法更顺手）
     const parentEnabled = Boolean(caller?.id) && this.isSessionEnabled(String(caller.id));
     const parentContextPack = Array.isArray(input?.contextPack) ? input.contextPack : [];

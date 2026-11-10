@@ -29,7 +29,7 @@ src/
   a2a/            可选 A2A 传输层
   bootstrap/      project_init
   workspaces/     每工作区独立状态
-  ui-server.ts    面板只读侧车
+  ui-server.ts    面板只读面板服务
 lib/              构建产物（committed，安装时直接加载）
 ```
 

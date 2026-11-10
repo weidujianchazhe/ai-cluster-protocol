@@ -5,8 +5,8 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     const NS = 'l0-control-ui';
     const PANEL_ID = 'l0-control';
-    // ── 侧车地址解析 ─────────────────────────────────────────────────────
-    // 侧车端口是**可配置的**（cfg.uiPort，默认 47831）。写死会在改端口后整套请求
+    // ── 面板服务地址解析 ─────────────────────────────────────────────────────
+    // 面板服务端口是**可配置的**（cfg.uiPort，默认 47831）。写死会在改端口后整套请求
     // 落到 `Failed to fetch`，且错误看起来像"没启动"，排查方向被完全带偏。
     // 策略：注入值/上次成功的值 → 默认端口 → 候选探测；成功后记进 localStorage。
     const DEFAULT_SIDECAR_PORT = 47831;
@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
     let resolvedBase = null;
     let resolving = null;
 
-    /** 探测哪个 base 上是我们的侧车（用 /ui/health，极便宜，不构造快照）。 */
+    /** 探测哪个 base 上是我们的面板服务（用 /ui/health，极便宜，不构造快照）。 */
     const resolveBase = async () => {
       if (resolvedBase) return resolvedBase;
       if (resolving) return resolving;
@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
             clearTimeout(timer);
             if (!res.ok) continue;
             const json = await res.json().catch(() => null);
-            // 认服务名，避免把别的 47831 服务当成侧车
+            // 认服务名，避免把别的 47831 服务当成面板服务
             if (json && json.ok === true && String(json.service || '').includes('l0-control')) {
               resolvedBase = base;
               try { window.localStorage && window.localStorage.setItem(BASE_STORAGE_KEY, base); } catch {}
@@ -65,7 +65,7 @@ window.__ModuleLoader__.load({
       }
     };
 
-    /** 带超时的请求：侧车卡住时不能让面板无限转圈。 */
+    /** 带超时的请求：服务卡住时不能让面板无限转圈。 */
     const request = async (base, path, init = {}, timeoutMs = 8000) => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -118,8 +118,31 @@ window.__ModuleLoader__.load({
       checkUpdate: '检查更新',
       close: '关闭',
       loading: '加载中…',
-      offline: 'UI 侧车未连接：面板已在回环地址上探测侧车端口但没找到。请确认控制面插件（dsh-l0-control）已启用；若改过 uiPort，请把面板地址指到该端口。',
+      offline: '面板服务未连接：已在回环地址上探测服务端口但没找到。请确认控制面插件（dsh-l0-control）已启用；若改过 uiPort，请把面板地址指到该端口。',
       members: '团队成员',
+      agentsEmpty: 'No sub-agents spawned yet. Spawn via agent_spawn or dispatch and they will appear here.',
+      teamNotCollected: 'Team board not collected yet. Click "Refresh team" to have this window\'s agent read it once.',
+      tabAgents: '智能体',
+      clusterLabel: '工作区集群',
+      agentsTitle: '智能体花名册',
+      agentsHint: '从插件 journal 折叠而来：谁被派出来、领了哪个节点、交没交证据、最后活跃时间；不依赖 team_status。',
+      agentsTotal: '智能体总数',
+      agentsRunning: '运行中',
+      agentsIdle: '空闲',
+      agentsWithLease: '持有节点',
+      agentsEmpty: '还没有派出过子 Agent；用 agent_spawn 或 dispatch 派活后会出现在这里。',
+      agentsRole: '职务',
+      agentsInstance: '实例',
+      agentsActivity: '状态',
+      agentsNode: '当前节点',
+      agentsEvidence: '证据',
+      agentsLastSeen: '最后活跃',
+      graphNodes: '图节点',
+      graphDone: '已完成',
+      teamNotCollected: '团队板尚未采集：点「刷新团队统计」让本窗口的 Agent 读一次。',
+      switchTarget: '作用对象',
+      accessOn: '本对话：已启用',
+      accessOff: '本对话：未启用',
       subagents: '递归子 Agent 总数',
       activeSubagents: '活跃子 Agent',
       tasks: '共同任务',
@@ -196,6 +219,27 @@ window.__ModuleLoader__.load({
       loading: 'Loading…',
       offline: 'UI sidecar not found on loopback: the panel probed the sidecar port and got nothing. Make sure dsh-l0-control is enabled; if uiPort was changed, point the panel at that port.',
       members: 'Members',
+      tabAgents: 'Agents',
+      clusterLabel: 'Workspace cluster',
+      agentsTitle: 'Agent roster',
+      agentsHint: 'Folded from the plugin journal: who was spawned, which node they hold, evidence count and last seen. Independent of team_status.',
+      agentsTotal: 'Agents',
+      agentsRunning: 'Running',
+      agentsIdle: 'Idle',
+      agentsWithLease: 'Holding nodes',
+      agentsEmpty: 'No sub-agents spawned yet. Spawn one with agent_spawn or dispatch and it will show up here.',
+      agentsRole: 'Role',
+      agentsInstance: 'Instance',
+      agentsActivity: 'Activity',
+      agentsNode: 'Current node',
+      agentsEvidence: 'Evidence',
+      agentsLastSeen: 'Last seen',
+      graphNodes: 'Nodes',
+      graphDone: 'Done',
+      teamNotCollected: 'Team board not collected yet. Click Refresh team to let this window agent read it once.',
+      switchTarget: 'Target',
+      accessOn: 'This conversation: enabled',
+      accessOff: 'This conversation: disabled',
       subagents: 'Recursive subagent total',
       activeSubagents: 'Active subagents',
       tasks: 'Shared tasks',
@@ -322,8 +366,11 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M8.6 7h6.8M7.4 8.8l3.5 6M16.6 8.8l-3.5 6', stroke: color, strokeWidth: 1.7, strokeLinecap: 'round' }));
     }
 
-    function Stat({ label, value }) {
-      return h('div', { style: stat }, h('div', { style: statValue }, String(value)), h('div', { style: muted }, label));
+    function Stat({ label, value, tone }) {
+      const valueStyle = tone === 'on'
+        ? { ...statValue, color: 'var(--dsw-alias-brand-primary)' }
+        : statValue;
+      return h('div', { style: stat }, h('div', { style: valueStyle }, String(value)), h('div', { style: muted }, label));
     }
 
     function Empty({ text }) {
@@ -395,7 +442,7 @@ window.__ModuleLoader__.load({
         || s.blank === true
       );
       const liveSessionId = ownSessionId || session?.id || null;
-      const [tab, setTab] = React.useState('team');
+      const [tab, setTab] = React.useState('agents');
       const [sidebarId, setSidebarId] = React.useState(null);
       const [projectId, setProjectId] = React.useState('code');
       const [pickedSession, setPickedSession] = React.useState(null);
@@ -439,7 +486,11 @@ window.__ModuleLoader__.load({
       const descendantsSource = data?.descendants?.source || 'none';
       // 新建项目用的目标工作区：优先侧栏选中的真实 path
       const boardWorkspacePath = (activeSidebar && activeSidebar.path) || data?.workspaceRoot || null;
-      const showData = coordinationEnabled && sessionAttached;
+      // 关键修复：原来 `showData = coordinationEnabled && sessionAttached`，而 sessionAttached
+      // 要求 team_status 被**活 Agent 手动调过**——没人调，整个面板就只剩「—」，看起来像摆设。
+      // 现在：拿到快照就展示（图计数、agent 花名册、黑板都来自 journal，与 team_status 无关）；
+      // team 数据缺了只是那一块显示"未采集"，不再拖垮整页。
+      const showData = Boolean(data && data.ok === true);
       const setAccess = async (patch) => {
         const target = activeSessionId || liveSessionId || data?.sessionId || null;
         if (!target) {
@@ -567,6 +618,8 @@ window.__ModuleLoader__.load({
       }, [load]);
 
       const team = data?.team && data.team.ok ? data.team : null;
+      const roster = data?.agents && data.agents.ok ? data.agents : null;
+      const rosterItems = Array.isArray(roster?.items) ? roster.items : [];
       const members = Array.isArray(team?.members) ? team.members : [];
       const tasks = Array.isArray(team?.tasks) ? team.tasks : [];
       const ready = Array.isArray(data?.graph?.ready) ? data.graph.ready : [];
@@ -589,6 +642,7 @@ window.__ModuleLoader__.load({
       };
 
       const tabs = [
+        ['agents', t('tabAgents')],
         ['team', t('tabTeam')],
         ['tasks', t('tabTasks')],
         ['board', t('tabBoard')],
@@ -640,12 +694,18 @@ window.__ModuleLoader__.load({
             }, sessionLabel(s)))),
 
         h('div', { style: statGrid },
-          h(Stat, { label: t('members'), value: loading ? '…' : (showData ? members.length : '—') }),
-          h(Stat, { label: t('subagents'), value: loading ? '…' : (showData && descendantsSource !== 'none' ? (data?.descendants?.count ?? 0) : '—') }),
-          h(Stat, { label: t('activeSubagents'), value: loading ? '…' : (showData && descendantsSource !== 'none' ? (data?.descendants?.active ?? 0) : '—') }),
-          h(Stat, { label: t('tasks'), value: loading ? '…' : (showData ? tasks.length : '—') }),
-          h(Stat, { label: t('ready'), value: loading ? '…' : (showData ? (graphEmpty ? '—' : ready.length) : '—') }),
-          h(Stat, { label: t('events'), value: loading ? '…' : (showData ? (data?.journal?.events ?? events.length) : '—') })),
+          h(Stat, { label: t('agentsTotal'), value: loading ? '…' : String(roster?.total ?? 0) }),
+          h(Stat, { label: t('agentsRunning'), value: loading ? '…' : String(roster?.running ?? 0), tone: (roster?.running ?? 0) > 0 ? 'on' : null }),
+          h(Stat, { label: t('agentsIdle'), value: loading ? '…' : String(roster?.idle ?? 0) }),
+          h(Stat, { label: t('agentsWithLease'), value: loading ? '…' : String(roster?.withLease ?? 0) }),
+          h(Stat, { label: t('graphNodes'), value: loading ? '…' : String(counts?.nodes ?? 0) }),
+          h(Stat, { label: t('graphDone'), value: loading ? '…' : String(counts?.done ?? 0) })),
+        h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 2, marginBottom: 6 } },
+          h('span', { style: muted }, `${t('subagents')}: ${descendantsSource === 'none' ? '—' : (data?.descendants?.count ?? 0)}`),
+          h('span', { style: muted }, `${t('activeSubagents')}: ${descendantsSource === 'none' ? '—' : (data?.descendants?.active ?? 0)}`),
+          h('span', { style: muted }, `${t('members')}: ${team ? (team.memberCount ?? members.length) : '—'}`),
+          h('span', { style: muted }, `${t('ready')}: ${graphEmpty ? '—' : ready.length}`),
+          h('span', { style: muted }, `${t('events')}: ${data?.journal?.events ?? events.length}`)),
         showData && graphEmpty ? h('div', { style: { ...muted, marginTop: -4, marginBottom: 8 } }, t('readyHint')) : null,
         coordinationEnabled && !sessionAttached ? h('div', { style: { ...muted, marginTop: -4, marginBottom: 8 } }, t('noSessionSnapshot')) : null,
 
@@ -663,20 +723,73 @@ window.__ModuleLoader__.load({
               onClick: enableWorkspaceCluster,
             }, t('enableCluster')) : null),
 
-          h('div', { style: { ...card, margin: 0, padding: '8px 12px' } },
+          // 控制区：三组开关 + 作用对象，全部**始终可见可点**（不再等 team_status）
+          h('div', { style: { ...card, margin: 0, padding: '10px 12px' } },
+            h('div', { style: { ...muted, ...mono, marginBottom: 6 } },
+              `${t('switchTarget')}: ${activeSessionId ? sessionLabel(sessionById.get(activeSessionId)) : '—'}`),
+            // ① 插件开关（本对话）
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 } },
               h('div', null,
                 h('div', { style: { ...sectionTitle, margin: 0 } }, t('pluginSwitch')),
-                h('div', { style: { ...muted, marginTop: 3 } }, `${t('pluginSwitch')}: ${coordinationEnabled ? t('pluginOn') : t('pluginOff')}`)),
+                h('div', { style: { ...muted, marginTop: 3 } }, coordinationEnabled ? t('accessOn') : t('accessOff'))),
               h('button', {
                 type: 'button',
                 style: { ...button, ...(coordinationEnabled ? selectedButton : {}) },
                 onClick: () => toggleAccess(!coordinationEnabled),
               }, coordinationEnabled ? t('disablePlugin') : t('enablePlugin'))),
-            h('div', { style: { ...muted, marginTop: 4 } }, t('pluginSwitchHint')))),
+            // ② 工作区集群
+            h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+              h('div', null,
+                h('div', { style: { ...sectionTitle, margin: 0 } }, t('clusterLabel')),
+                h('div', { style: { ...muted, marginTop: 3 } }, clusterEnabled ? t('clusterEnabled') : t('clusterDisabled'))),
+              clusterEnabled ? null : h('button', {
+                type: 'button',
+                style: button,
+                onClick: enableWorkspaceCluster,
+              }, t('enableCluster'))),
+            // ③ 工作区管理三态
+            h('div', { style: { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--dsw-alias-border-l1)' } },
+              h('div', { style: { ...sectionTitle, margin: 0 } }, t('managementSwitch')),
+              h('div', { style: { display: 'flex', gap: 6, marginTop: 6 } },
+                [['off', t('mgmtOff')], ['auto', t('mgmtAuto')], ['on', t('mgmtOn')]].map(([mode, label]) =>
+                  h('button', {
+                    key: mode,
+                    type: 'button',
+                    style: { ...button, ...(managementMode === mode ? selectedButton : {}) },
+                    onClick: () => setManagement(mode),
+                  }, label))),
+              h('div', { style: { ...muted, marginTop: 4 } }, t('mgmtSwitchHint'))),
+            h('div', { style: { ...muted, marginTop: 6 } }, t('pluginSwitchHint')))),
 
         h('div', { style: tabRow }, tabs.map(([id, label]) =>
           h('button', { key: id, type: 'button', style: tabStyle(tab === id), onClick: () => setTab(id) }, label))),
+
+        tab === 'agents' ? h('div', { style: card },
+          h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' } },
+            h('h2', { style: sectionTitle }, t('agentsTitle')),
+            h('span', { style: muted }, loading ? '…' : `${roster?.total ?? 0}`)),
+          h('div', { style: muted }, t('agentsHint')),
+          roster && roster.byRole && Object.keys(roster.byRole).length
+            ? h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 } },
+              Object.entries(roster.byRole).map(([role, n]) => h('span', { key: role, style: pill }, `${role} × ${n}`)))
+            : null,
+          rosterItems.length === 0
+            ? h(Empty, { text: t('agentsEmpty') })
+            : rosterItems.map((item) => h('div', {
+              key: item.instanceId,
+              style: { ...row, gridTemplateColumns: 'minmax(150px, 1.4fr) minmax(90px, .7fr) minmax(90px, .6fr) minmax(120px, 1fr)' },
+            },
+              h('div', null,
+                h('div', { style: { fontWeight: 550 } }, fmt(item.label || item.instanceId)),
+                h('div', { style: { ...mono, ...muted } }, fmt(item.instanceId))),
+              h('div', null, h('span', { style: pill }, fmt(item.role))),
+              h('div', null, h('span', {
+                style: item.activity === 'running' ? { ...pill, color: 'var(--dsw-alias-brand-primary)' } : pill,
+              }, fmt(item.activity))),
+              h('div', null,
+                h('div', { style: mono }, fmt(item.currentNode)),
+                h('div', { style: { ...mono, ...muted, fontSize: 11 } },
+                  `${t('agentsEvidence')} ${item.evidenceCount ?? 0} · ${t('agentsLastSeen')} ${fmt(String(item.lastSeen || '').slice(11, 19))}`))))) : null,
 
         tab === 'team' ? h('div', { style: card },
           h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 12 } },
@@ -685,8 +798,8 @@ window.__ModuleLoader__.load({
           h('div', { style: muted }, t('teamHint')),
           h('button', { type: 'button', style: { ...button, marginTop: 6, fontSize: 12, padding: '2px 8px' }, onClick: refreshTeam }, t('refreshTeam')),
           h('div', { style: { ...muted, marginTop: 4 } }, `来源 ${teamSource}${data?.team?.capturedAt ? ` · ${data.team.capturedAt}` : ''}${data?.team?.sessionId ? ` · session ${String(data.team.sessionId).slice(0, 12)}` : ''}`),
-          !coordinationEnabled ? h(Empty, { text: '—' }) : null,
-          coordinationEnabled && !sessionAttached ? h(Empty, { text: t('noSessionSnapshot') }) : null,
+          coordinationEnabled ? null : h('div', { style: { ...muted, marginTop: 6 } }, t('accessOff')),
+          team ? null : h('div', { style: { ...muted, marginTop: 6 } }, t('teamNotCollected')),
           !showData ? null : members.length === 0 ? h(Empty, { text: t('noMembers') }) : members.map((m) =>
             h('div', { key: m.id || m.name, style: { ...row, gridTemplateColumns: 'minmax(140px, 1.4fr) minmax(80px, .7fr) minmax(80px, .7fr)' } },
               h('div', null, h('div', { style: { fontWeight: 550 } }, fmt(m.name || m.id)), h('div', { style: { ...mono, ...muted } }, fmt(m.id || ''))),
@@ -705,7 +818,8 @@ window.__ModuleLoader__.load({
         tab === 'tasks' ? h('div', { style: card },
           h('h2', { style: sectionTitle }, t('tasksTitle')),
           h('div', { style: muted }, t('tasksHint')),
-          !coordinationEnabled ? h(Empty, { text: '—' }) : !sessionAttached ? h(Empty, { text: t('noSessionSnapshot') }) : tasks.length === 0 ? h(Empty, { text: t('noTasks') }) : tasks.map((task) =>
+          coordinationEnabled ? null : h('div', { style: { ...muted, marginTop: 4 } }, t('accessOff')),
+          tasks.length === 0 ? h(Empty, { text: team ? t('noTasks') : t('teamNotCollected') }) : tasks.map((task) =>
             h('div', { key: task.id, style: { ...row, gridTemplateColumns: 'minmax(180px, 1.6fr) minmax(90px, .6fr) minmax(110px, .7fr)' } },
               h('div', null, h('div', { style: { fontWeight: 550 } }, fmt(task.subject || task.id)), h('div', { style: { ...mono, ...muted } }, fmt(task.id))),
               h('div', null, h('span', { style: pill }, fmt(task.status))),
@@ -721,7 +835,7 @@ window.__ModuleLoader__.load({
               + `${data.blackboardMode ? ` · ${data.blackboardMode}` : ''}`
               + `${(data.blackboardSummary.failedDecisions || []).length ? ` · ${t('bbFailed')} ${data.blackboardSummary.failedDecisions.length}` : ''}`)
             : null,
-          !coordinationEnabled ? h(Empty, { text: '—' }) : !sessionAttached ? h(Empty, { text: t('noSessionSnapshot') }) : events.length === 0 ? h(Empty, { text: t('noEvents') }) : events.map((event, index) =>
+          events.length === 0 ? h(Empty, { text: t('noEvents') }) : events.map((event, index) =>
             h('div', { key: `${event.at || ''}-${index}`, style: { ...row, gridTemplateColumns: 'minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(160px, 1.5fr)' } },
               h('div', { style: mono }, fmt(event.kind)),
               h('div', { style: { ...mono, ...muted } }, fmt(event.at)),

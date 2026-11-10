@@ -15,6 +15,7 @@ import { validateRoleTables } from './security/roles.js';
 import { L0ControlService, sanitizeForHost } from './service.js';
 import { buildTools } from './tools.js';
 import { authorizeWithAudit, isSecurityError, httpStatusFor } from './security/index.js';
+import { resolveActor } from './security/actor.js';
 import { createObservability, instrumentTool } from './observability/index.js';
 import { buildAgentCard, createA2ARouter, startA2AServer } from './a2a/index.js';
 import { createA2ATaskPort } from './wiring/a2a-port.js';
@@ -52,22 +53,12 @@ const ACTION_BY_TOOL                         = {
   memory_writeback: 'memory.write',
 };
 
+/**
+ * 调用者解析：实现已抽到 `security/actor.ts` 的纯函数（可单测）。
+ * 这里只做参数绑定，保持调用点不变。
+ */
 function actorOf(exec     , args     , tenant        ) {
-  // 角色解析顺序 = 「调用者此刻以谁的身份行事」。审计实例必须排在生产者之前：
-  // verify_done 需要 AUDIT 角色，若先取 producer_instance，actor 会被认成 CODE，
-  // 即便带齐了 auditor_instance 也会 403，且消息里看不出是哪一环不匹配。
-  const candidate = [
-    args?.instanceId,
-    args?.auditor_instance,
-    args?.auditorInstance,
-    args?.producer_instance,
-    args?.producerInstance,
-  ].find((value) => typeof value === 'string' && roleOfInstance(value));
-  if (candidate) return { id: String(candidate), kind: 'agent', tenant, roles: [roleOfInstance(candidate)          ] };
-  const agentId = exec?.agent?.id;
-  if (agentId) return { id: String(agentId), kind: 'agent', tenant, roles: ['ORCH', 'HUMAN'] };
-  // 宿主/插件内部调用（无活 Agent）
-  return { id: 'plugin', kind: 'plugin', tenant, roles: ['PLUGIN', 'HUMAN'] };
+  return resolveActor({ args, exec, tenant, roleOfInstance });
 }
 
 export function apply(ctx     , rawConfig          = {}) {
@@ -270,6 +261,8 @@ export function apply(ctx     , rawConfig          = {}) {
       pool.get(workspaceRoot ?? service.workspaceRoot).accessFor(sessionId),
     getCluster: (workspaceRoot         ) =>
       pool.clusterFor(workspaceRoot ?? service.workspaceRoot),
+    getAgents: (workspaceRoot         ) =>
+      pool.get(workspaceRoot ?? service.workspaceRoot).buildAgentRoster(),
     enableCluster: (input                                                ) =>
       pool.enableCluster(input?.workspaceRoot ?? service.workspaceRoot, input?.sessionId ?? null),
     setAccess: (input                                                                                                                            ) =>

@@ -23,6 +23,8 @@ import http from 'node:http';
                                                                       
                                               
                                                    
+                                                       
+                                                  
                                     
                                                                                      
                                                                               
@@ -300,6 +302,20 @@ export async function startUiServer(options                 )                   
     }
     if (method !== 'GET') {
       send(res, 405, { ok: false, error: 'method-not-allowed', allow: 'GET, POST, OPTIONS' });
+      return;
+    }
+    // GET /ui/agents：智能体花名册（journal 折叠，不依赖 team_status / 活 Agent）
+    if (path === '/ui/agents') {
+      if (typeof options.getAgents !== 'function') {
+        send(res, 501, { ok: false, error: 'agents-not-wired' });
+        return;
+      }
+      try {
+        const roster = options.getAgents(workspaceRoot);
+        send(res, 200, roster ?? { ok: false, error: 'agents-empty' });
+      } catch (error) {
+        send(res, 500, { ok: false, error: 'agents-failed', message: String((error         )?.message ?? error) });
+      }
       return;
     }
     if (path === '/ui/workspaces') {
