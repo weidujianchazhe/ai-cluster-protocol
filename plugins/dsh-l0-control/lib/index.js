@@ -235,10 +235,13 @@ export function apply(ctx     , rawConfig          = {}) {
   }
 
   // 只读 UI 侧车：给 @local/dsh-l0-control-ui 面板提供快照（默认 47831）
+  //
+  // 端口策略（治"面板老是连不上"）：首选配置端口，被占用时依次试 +1…+7，最后交给系统分配（0）。
+  // 之前写死单端口，一旦 EADDRINUSE 服务根本起不来，面板就永久空着，且错误只在 journal 里。
+  // 面板侧本来就是"候选探测"，所以换端口不影响它找到服务。
   let uiHandle                                                               = null;
-  startUiServer({
+  const uiOptions = {
     host: config.uiHost,
-    port: Number(config.uiPort ?? 47831),
     // 回环 host 默认放行（GUI 端口会变）；这里只补非回环场景（逗号分隔）。
     allowedOrigins: String(config.uiAllowedOrigins ?? '')
       .split(',')
@@ -288,14 +291,42 @@ export function apply(ctx     , rawConfig          = {}) {
         },
         input?.sessionId ?? null,
       ),
-  })
-    .then((handle     ) => {
-      uiHandle = handle;
-      service.appendJournal('ui_started', { url: handle.url, port: handle.port });
-    })
-    .catch((error         ) => {
-      service.appendJournal('ui_failed', { error: String((error         )?.message ?? error) });
-    });
+  };
+
+  /**
+   * 起 UI 服务：首选端口被占时依次试 +1…+7，最后交给系统分配。
+   * 只写死一个端口的话，EADDRINUSE 会让服务彻底起不来、面板永久空白，
+   * 而且错误只落在 journal 里，从界面上完全看不出来。
+   */
+  const startUiWithFallback = async () => {
+    const preferred = Number(config.uiPort ?? 47831);
+    const candidates = Number.isFinite(preferred) && preferred > 0
+      ? [preferred, ...Array.from({ length: 7 }, (_, i) => preferred + i + 1), 0]
+      : [0];
+    const attempts                                         = [];
+    for (const port of candidates) {
+      try {
+        const handle = await startUiServer({ ...uiOptions, port });
+        uiHandle = handle;
+        service.appendJournal('ui_started', {
+          url: handle.url,
+          port: handle.port,
+          requestedPort: port,
+          attempts: attempts.length,
+        });
+        return handle;
+      } catch (error) {
+        const message = String((error         )?.message ?? error);
+        attempts.push({ port, error: message });
+      }
+    }
+    service.appendJournal('ui_failed', { attempts });
+    return null;
+  };
+
+  startUiWithFallback().catch((error         ) => {
+    service.appendJournal('ui_failed', { error: String((error         )?.message ?? error) });
+  });
 
   ctx.effect(() => () => {
     // 卸载/disable 时必须释放持久层锁（否则下一世代 open 会 STATE_LOCKED）。
