@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "l0/work_graph.schema.json",
-  "title": "L0 work graph (training-free invocation layer) · v2",
-  "description": "工作图最小 schema v2：节点是工作单元，不是执行实例。新增 capability / stage / evidence_required / evidence / decision / replan_events / stage_gates / A2A 预留字段。设计",
+  "title": "L0 工作图（免训练调用层）· v2",
+  "description": "工作图最小 schema v2：节点是工作单元，不是执行实例。新增 capability / stage / evidence_required / evidence / decision / replan_events / stage_gates / A2A 预留字段。",
   "type": "object",
   "additionalProperties": false,
   "required": [

@@ -1,4 +1,4 @@
-# DSH runtime state / local sessions
+# ── DSH 运行期状态 / 本地会话（不入库）──────────────────────────────
 .l0-control*/
 .l0-control
 .l0-adapter/
@@ -9,29 +9,29 @@ out/
 .DS_Store
 Thumbs.db
 
-# Node / build caches
+# ── Node / 构建缓存 ──────────────────────────────────────────────
 node_modules/
 .pnpm-store/
 *.tsbuildinfo
 
-# Python caches
+# ── Python 缓存 ─────────────────────────────────────────────────
 __pycache__/
 *.pyc
 .pytest_cache/
 
-# Generated test artifacts (keep source scripts/scenarios)
+# ── 测试生成物（源脚本与场景保留，只忽略产物）─────────────────────
 plugins/dsh-l0-control/tests/e2e/artifacts/
 plugins/dsh-l0-control/tests/e2e/native-real/run-*.json
 plugins/dsh-l0-control/tests/e2e/autonomy/artifacts/
 
 .probe-state.json
 
-# local adapter/probe fixtures (not part of the published plugins)
+# ── 本地适配器 / 探针夹具（不属于对外发布的插件）────────────────────
 plugins/dsh-l0-adapter/
 plugins/dsh-probe/
 plugins/dsh-probe2/
 
-# 本地工具临时状态 / 与本仓库无关的本地数据，绝不入库
+# ── 本地工具临时状态 / 与本仓库无关的本地数据，绝不入库 ────────────
 plugins/dsh-l0-control/.l0-measure/
 plugins/dsh-l0-control/.l0-dbg/
 .dsh-meow/
@@ -42,7 +42,7 @@ moltbook/
 notes/
 eigenflux-audit/
 
-# 本地研发产物 / 备份：不进公开包
+# ── 本地研发产物 / 备份：不进公开包 ──────────────────────────────
 artifacts/
 audit/
 *.bak

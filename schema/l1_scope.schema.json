@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "l0/l1_scope.schema.json",
-  "title": "L1.1 scope share request",
+  "title": "L1.1 限定作用域共享请求",
   "description": "L1.1 限定作用域的读侧共享请求。判据即本 schema 的字段约束。scope 刻意非必填——未标注由语义检查拒绝（fail-closed）。",
   "type": "object",
   "additionalProperties": false,
