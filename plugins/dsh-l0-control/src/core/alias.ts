@@ -104,4 +104,5 @@ export const ALIASES = {
   instanceId: ["instanceId", "instance_id"],
   maxParallel: ["maxParallel", "max_parallel"],
   budgetTokens: ["budgetTokens", "budget_tokens"],
+  usageTokens: ["usageTokens", "usage_tokens"],
 } as const;

@@ -111,6 +111,7 @@ export const LEGAL_WORKER_ROLES                    = Object.keys(ROLE_PROFILES).
 
                                     
                
+                                                                                                                                                    
                      
                              
                      
@@ -139,6 +140,15 @@ export function buildWorkerPrompt(input                   )         {
   const auditPartner = input.auditPartner ?? '（未指定：审计节点请找一个非自己生产者的审计实例）';
   const capability = String(input.capability ?? '').trim() || `（未指定能力包，按实例身份兜底：${profile.mission}）`;
   const contextPack = (input.contextPack ?? []).map((line) => String(line).trim()).filter(Boolean);
+  const brief = input.taskBrief ?? {};
+  const briefLines = [
+    brief.objective ? `目标：${brief.objective}` : null,
+    brief.writeScopes?.length ? `写域：${brief.writeScopes.join(', ')}` : null,
+    brief.acceptance?.length ? `验收：${brief.acceptance.join('；')}` : null,
+    brief.evidenceRefs?.length ? `证据引用：${brief.evidenceRefs.join(', ')}` : null,
+    brief.leaseRef ? `租约引用：${brief.leaseRef}` : null,
+    brief.omitted?.length ? `已省略：${brief.omitted.join(', ')}（按需取回）` : null,
+  ].filter(Boolean)            ;
   const stageList = input.stageHint
     ? String(input.stageHint)
     : profile.stages.join(', ');
@@ -157,13 +167,16 @@ export function buildWorkerPrompt(input                   )         {
     '## 能力包（本次任务所需能力）',
     capability,
     '',
+    '## 最小任务简报（本域边界）',
+    briefLines.length ? briefLines.map((line) => `- ${line}`).join('\n') : '- 使用本次任务描述与图节点验收条件；跨域信息通过引用按需读取。',
+    '',
     '## 任务上下文（事实/约束，按需引用）',
     contextPack.length ? contextPack.map((line) => `- ${line}`).join('\n') : '- （无额外上下文）',
     '',
     '## 记忆优先（子 Agent）',
     '- 父会话的完整历史不是你的工作记忆；只使用本任务上下文与按需读取的工程记忆。',
     '- 需要项目背景/上次交接时调用 `memory_load`，只读当前任务卡/STATE/一篇记录。',
-    '- 阶段完成或交接前调用 `memory_writeback` 写回结论、证据、下一步；不要复述或重读全文。',
+    '- 阶段完成或交接前调用 `memory_writeback` 写回结论、证据、下一步；读取任务卡时传 `expectedCardRevision`，沿用 `memory_load.taskCard.revision` 以避免覆盖并发更新。',
     '',
     '## 允许的工具（白名单，只准用这些）',
     profile.tools.map((tool) => `- ${tool}`).join('\n'),
@@ -181,10 +194,11 @@ export function buildWorkerPrompt(input                   )         {
     `2. \`task_next({role:"${profile.role}"})\` —— 取 ready 集；只挑 stage ∈ {${stageList}} 的节点。没有就结束。`,
     `3. \`task_claim({nodeId, role:"${profile.role}", instanceId:"${input.instanceId}"})\` —— 用**你自己的实例 ID** 领；拿回 lease.fencing_token 并按上面的"心跳"节续租。`,
     '4. 产出真实 artifact（写文件/产物路径），不要编造路径。',
-    `5. \`evidence_submit({nodeId, artifactPath, producer_instance:"${input.instanceId}", acceptance:{kind:"exists"}, verifier:"verifier-ci"})\`。`,
+    `5. \`evidence_submit({nodeId, artifactPath, fencingToken:<claim token>, producer_instance:"${input.instanceId}", acceptance:{kind:"exists"}, verifier:"verifier-ci"})\`。`,
     '6. 若节点 stage 的闸门还没过：`pass_gate({stage:<该节点 stage>, evidence_refs:[artifactPath]})`。',
-    `7. \`verify_done({nodeId, producer_instance:"${input.instanceId}", auditor_instance:"${auditPartner}"})\` —— **auditor 必须不是你**。`,
-    '8. 回到第 1 步，最多 ' + maxIterations + ' 轮。',
+    '7. 把 evidenceId、验收口径、产物引用与 fencingToken 交给独立审计实例；由审计者自己的 caller 调用 verify_done 完成判定，不得代填 auditor_instance。',
+    '8. 在交接/完成轮次调用 `memory_writeback({summary, evidence, next, taskCard, expectedCardRevision})`；如遇 `stale-card-revision`，重新 `memory_load` 后合并写回。',
+    '9. 回到第 1 步，最多 ' + maxIterations + ' 轮。',
     '',
     '## 失败处置（不要瞎重试）',
     '- `LeaseHeld`：说明别人在做 → 换 `task_next` 的**另一个**节点；不要抢。',

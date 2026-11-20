@@ -437,7 +437,9 @@ export class Store {
   async snapshot(): Promise<{ write: SnapshotWriteResult | null; meta: SnapshotMeta }> {
     this.assertOpen();
     const records = this.journalRef.records();
-    const raw = (await this.fsPort.readText(this.paths.journal)) ?? '';
+    // 原文走 journal 的缓存（`loadAndRepair` 刚读过 / 追加后按需重读一次），
+    // 不要自己 `readText`：那等于把整条 journal 再读一遍，只为算两个摘要。
+    const raw = await this.journalRef.rawText();
     const file = buildSnapshot(this.doc, records, raw, nowIso(this.clock()));
     const current = await this.fsPort.versionOf(this.paths.snapshot);
     const sameAnchor =

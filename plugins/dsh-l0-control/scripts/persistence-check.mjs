@@ -35,10 +35,16 @@ const CHAIN = [
 /** 本测试自己的 6 节点 spec（生产路径不再自动生成固定流水线）。 */
 const CHAIN_SPEC = {
   wish: '持久化验收：6 节点全链',
+  coordination: { enabled: true, maxActive: 24, maxQueuedTasks: 5000, ratePerSecond: 75, partitions: [
+    { id: 'root', nodeRefs: [], maxActive: 12 },
+    { id: 'workers-a', parentId: 'root', nodeRefs: CHAIN.slice(0, 3).map((node) => node.nodeId), maxActive: 3 },
+    { id: 'workers-b', parentId: 'root', nodeRefs: CHAIN.slice(3).map((node) => node.nodeId), maxActive: 3 },
+  ] },
   nodes: CHAIN.map((node, index) => ({
     nodeId: node.nodeId,
     title: node.nodeId,
     stage: node.stage,
+    status: index === 0 ? 'ready' : 'planned',
     deps: index === 0 ? [] : [CHAIN[index - 1].nodeId],
     acceptance: { kind: 'exists' },
   })),
@@ -56,29 +62,34 @@ function check(name, fn) {
 
 // ── 代次 1：建图 + 6 节点全链 + 逐节点落盘 ──────────────────
 const p1 = await CorePersistence.open({ dir, mode: 'node', owner: 'gen-1' });
-core.submitWish({ text: '持久化验收：6 节点全链', maxParallel: 6, budgetTokens: 0 });
-core.graphCommit(CHAIN_SPEC);
+const run1 = (fn) => core.withCoreStore(p1.coreStore, fn);
+run1(() => core.submitWish({ text: '持久化验收：6 节点全链', maxParallel: 6, budgetTokens: 0 }));
+run1(() => core.graphCommit(CHAIN_SPEC));
+run1(() => core.bootstrap(p1.coreStore));
 
 const steps = [];
 for (const node of CHAIN) {
   const store = p1.coreStore;
-  const gate = core.passGate(store, node.stage, []);
-  const claim = core.claimTask({ nodeId: node.nodeId, role: 'ANY', instanceId: node.producer });
-  const evidence = core.submitEvidence({
+  const gate = run1(() => core.passGate(store, node.stage, []));
+  const claim = run1(() => core.claimTask({ nodeId: node.nodeId, role: 'ANY', instanceId: node.producer }));
+  const fencingToken = Number(claim?.lease?.fencing_token);
+  const evidence = run1(() => core.submitEvidence({
+    fencingToken,
     nodeId: node.nodeId,
     artifactPath: artifact,
     producer_instance: node.producer,
     producerInstance: node.producer,
     acceptance: { kind: 'exists' },
-  });
-  const done = core.verifyDone({
+  }));
+  const done = run1(() => core.verifyDone({
     nodeId: node.nodeId,
     producer_instance: node.producer,
     producerInstance: node.producer,
+    fencingToken,
     auditor_instance: node.auditor,
     auditorInstance: node.auditor,
     acceptance: { kind: 'exists' },
-  });
+  }));
   const persisted = await p1.persist();
   steps.push({
     nodeId: node.nodeId,
@@ -90,20 +101,21 @@ for (const node of CHAIN) {
   });
 }
 const snap1 = p1.snapshot();
-const status1 = core.graphStatus();
+const status1 = run1(() => core.graphStatus());
 await p1.close({ snapshot: true });
 
 // ── 代次 2：只读重开 ────────────────────────────────────────
 const p2 = await CorePersistence.open({ dir, mode: 'node', owner: 'gen-2' });
+const run2 = (fn) => core.withCoreStore(p2.coreStore, fn);
 const snap2 = p2.snapshot();
-const status2 = core.graphStatus();
+const status2 = run2(() => core.graphStatus());
 let mismatches = null;
 try {
-  mismatches = core.replayMismatches(p2.coreStore);
+  mismatches = run2(() => core.replayMismatches(p2.coreStore));
 } catch (error) {
   mismatches = { error: String(error?.message || error) };
 }
-const gates = core.listGates(p2.coreStore);
+const gates = run2(() => core.listGates(p2.coreStore));
 
 check('gen1: 六节点全链跑完（每步 gate→claim→evidence→done）', () => ({
   ok:
@@ -142,8 +154,9 @@ check('gen2: 重开后 counts = {6,5,6,0}（state 回折正确）', () => ({
     status2?.counts?.nodes === 6 &&
     status2?.counts?.edges === 5 &&
     status2?.counts?.done === 6 &&
-    status2?.counts?.blocked === 0,
-  detail: status2?.counts,
+    status2?.counts?.blocked === 0 && status2?.coordination?.maxActive === 24 &&
+    status2?.coordination?.partitions?.length === 3 && status2?.coordination?.ratePerSecond === 75,
+  detail: { counts: status2?.counts, coordination: status2?.coordination },
 }));
 
 check('gen2: replay == snapshot（无 mismatch）', () => {
@@ -174,7 +187,7 @@ await p2.close();
 const p3 = await CorePersistence.open({ dir, mode: 'node', owner: 'gen-3' });
 const reopened = await p3.persist();
 const snap3 = p3.snapshot();
-const status3 = core.graphStatus();
+const status3 = run2(() => core.graphStatus());
 await p3.close();
 
 check('lock: close() 后立即重开，无 STATE_LOCKED', () => {

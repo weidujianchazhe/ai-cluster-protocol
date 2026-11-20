@@ -17,6 +17,12 @@ export interface SurfaceEntry {
 export const TOOL_SURFACE: Record<string, SurfaceEntry> = {
   wish_submit: { grade: 'self-built', nativeService: null, note: '愿望 → 图（N3 core 决策；插件只做入口与参数校验）' },
   graph_status: { grade: 'self-built', nativeService: null, note: '读 journal/快照投影 + 组成因子巡检，不触碰宿主会话' },
+  // 只读诊断：宿主服务 + 存储落点/容量 + 规模建议。不写任何业务状态，故归 self-built。
+  // 只读聚合：从已有信号算过程质量。**不参与任何判定**，故归 self-built。
+  neighbor_digest: { grade: 'self-built', nativeService: null, note: '只读邻域摘要：同分区已完成的节点（定长截断 + 成本估算），不读盘、不参与判定' },
+  collaboration_map: { grade: 'self-built', nativeService: null, note: '只读聚合：谁读了谁 + 有耦合/无耦合的质量对比，不参与判定' },
+  quality_report: { grade: 'self-built', nativeService: null, note: '只读聚合过程质量（证据来源 / 返工 / 审计独立性），不写 journal、不参与判定' },
+  env_check: { grade: 'self-built', nativeService: null, note: '开工前环境体检：宿主服务、数据落点与各盘空间、按实测速率推算的规模上限' },
   dispatch: { grade: 'self-built', nativeService: null, note: '派活循环控制：off/interval/resident；默认 off + dryRun，不自动 claim' },
   memory_load: { grade: 'self-built', nativeService: null, note: '按需读取管理区任务卡/STATE/报告，紧凑文本 + 引用，不自动注入' },
   memory_writeback: { grade: 'self-built', nativeService: null, note: '写回本轮结论/下一步/证据到报告，任务卡追加指针；不复制全文' },
@@ -73,6 +79,13 @@ export const TOOL_SURFACE: Record<string, SurfaceEntry> = {
   project_init: { grade: 'self-built', nativeService: 'fs+git', note: 'bootstrap：dry-run 默认、marker 幂等、只 git init 不 commit/push、git 缺失 fail-soft' },
   graph_plan: { grade: 'self-built', nativeService: 'core/graphspec', note: '工作图组成因子预览：校验 + errors/warnings/ready，零写入（不套固定模板）' },
   graph_commit: { grade: 'self-built', nativeService: 'core/graphspec', note: '校验通过后落图；同一份图重复提交幂等；校验失败零写入' },
+  graph_checkpoint: { grade: 'self-built', nativeService: 'core/checkpoint', note: '为指定分区落检查点：追加 partition_checkpointed 事件、返回 baseSeq；不改节点状态' },
+  graph_recover: { grade: 'self-built', nativeService: 'core/checkpoint', note: '恢复报告：最近检查点元数据 + 待重放事件数；实际重放由调用方 foldEvents 完成' },
+  graph_resume_plan: {
+    grade: 'self-built',
+    nativeService: 'core/checkpoint',
+    note: '分区恢复计划：resume / skipCompleted / drift 三分类，防「已完成 activity 被重放」',
+  },
 };
 
 /**
@@ -111,7 +124,7 @@ export const QUALITY = Object.freeze({
 
 export const CAPABILITIES = Object.freeze({
   plugin: 'dsh-l0-control',
-  contractVersion: '0.1.0',
+  contractVersion: '0.2.0',
   backend: 'dsh-host-plugin',
   toolCount: Object.keys(TOOL_SURFACE).length,
   tools: TOOL_SURFACE,

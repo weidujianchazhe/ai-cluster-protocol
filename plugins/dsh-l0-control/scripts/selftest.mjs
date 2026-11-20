@@ -42,6 +42,9 @@ check('build: lib 与 src 同步', () => {
 
 // 2. apply 注册面
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'l0control-'));
+fs.mkdirSync(path.join(workspaceRoot, '管理区', 'tasks'), { recursive: true });
+fs.mkdirSync(path.join(workspaceRoot, '管理区', 'reports'), { recursive: true });
+fs.writeFileSync(path.join(workspaceRoot, '管理区', 'STATE.md'), '# STATE\n下一步：handoff-latest\n', 'utf8');
 const registered = [];
 const provided = {};
 let disposer = null;
@@ -60,20 +63,24 @@ const ctx = {
 const mod = await import(pathToFileURL(path.join(root, 'lib', 'index.js')).href);
 const handle = mod.apply(ctx, { workspaceRoot, stateDir: '.l0-control-selftest' });
 
-check('apply: 注册 22 个工具（含 agent_reap / memory_load / memory_writeback / dispatch / task_heartbeat）', () => ({
+check('apply: 注册 29 个工具（含 env_check / agent_reap / memory_load / memory_writeback / dispatch / task_heartbeat / graph_checkpoint / graph_recover / graph_resume_plan）', () => ({
   ok:
-    registered.length === 22 &&
+    registered.length === 29 &&
     registered.includes('project_init') &&
     registered.includes('graph_plan') &&
     registered.includes('graph_commit') &&
     registered.includes('memory_load') &&
     registered.includes('task_heartbeat') &&
+    registered.includes('env_check') &&
+    registered.includes('quality_report') &&
+    registered.includes('collaboration_map') &&
+    registered.includes('neighbor_digest') &&
     registered.includes('dispatch'),
   detail: { tools: registered, handle: handle?.tools ?? null },
 }));
 
 check('apply: 注册 l0control 服务', () => ({
-  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === 22,
+  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === 29,
   detail: { describe: provided.l0control?.describe?.().toolCount ?? null },
 }));
 
@@ -139,13 +146,13 @@ check('export: 真写 capabilities.json / STATE.md', async () => {
   };
 });
 
-check('capabilities: native 分级覆盖 22 工具', () => {
+check('capabilities: native 分级覆盖 29 工具', () => {
   const grades = mod.CAPABILITIES.tools;
   const keys = Object.keys(grades);
   const nativeTools = keys.filter((key) => grades[key].grade === 'native');
   return {
     ok:
-      keys.length === 22 &&
+      keys.length === 29 &&
       nativeTools.includes('team_status') &&
       grades.team_status.nativeService === 'agentTeams' &&
       grades.project_init.grade === 'self-built' &&
@@ -561,7 +568,7 @@ check('ui-server: GET/POST /ui/access 往返 + 非法体 400', async () => {
   }
 });
 
-check('graphspec: plan 零写入 / 分支+汇合合法 / 非法四类零写入 / commit 幂等 / wish_submit 不建图', async () => {
+check('graphspec: plan 零写入 / 分支+汇合 / 分区域树与预算校验 / commit 幂等 / wish_submit 不建图', async () => {
   const { L0ControlService } = await import(pathToFileURL(path.join(root, 'lib', 'service.js')).href);
   const ctx = { get: () => undefined, provide: () => {}, effect: () => {}, tabs: null, tools: { register: () => {} } };
   const svc = new L0ControlService(ctx, { workspaceRoot, stateDir: '.l0-control-graphspec' }, {});
@@ -598,6 +605,23 @@ check('graphspec: plan 零写入 / 分支+汇合合法 / 非法四类零写入 /
     { nodeId: 'X', title: 'x', acceptance: { kind: 'exists' } },
     { nodeId: 'X', title: 'x2', acceptance: { kind: 'exists' } },
   ] };
+  const partitionBase = {
+    ...diamond,
+    coordination: { enabled: true, partitions: [
+      { id: 'root', nodeRefs: ['A', 'B'], maxActive: 2, budgetTokens: 1000 },
+      { id: 'child', parentId: 'root', nodeRefs: ['C', 'D'], maxActive: 2 },
+    ] },
+  };
+  const validPartitions = await svc.graphPlan(partitionBase);
+  const managementOnlyCycle = await svc.graphPlan({ ...partitionBase, coordination: { enabled: true, partitions: [
+    { id: 'p1', parentId: 'p2', nodeRefs: ['A'] }, { id: 'p2', parentId: 'p1', nodeRefs: ['B'] },
+  ] } });
+  const overlappingPartitions = await svc.graphPlan({ ...partitionBase, coordination: { enabled: true, partitions: [
+    { id: 'p1', nodeRefs: ['A'] }, { id: 'p2', nodeRefs: ['A'] },
+  ] } });
+  const unknownPartitionNode = await svc.graphPlan({ ...partitionBase, coordination: { enabled: true, partitions: [{ id: 'p', nodeRefs: ['UNKNOWN'] }] } });
+  const unknownPartitionParent = await svc.graphPlan({ ...partitionBase, coordination: { enabled: true, partitions: [{ id: 'p', parentId: 'missing', nodeRefs: [] }] } });
+  const invalidLimits = await svc.graphPlan({ ...partitionBase, coordination: { enabled: true, maxQueuedTasks: 0, ratePerSecond: 0, delegation: { enabled: true, maxFanout: 0 }, partitions: [{ id: 'p', nodeRefs: [], maxActive: 0, budgetTokens: -1 }] } });
   const badPlan = await svc.graphPlan(badCycle);
   const badUnknownPlan = await svc.graphPlan(badUnknown);
   const badNoAccPlan = await svc.graphPlan(badNoAcceptance);
@@ -615,8 +639,18 @@ check('graphspec: plan 零写入 / 分支+汇合合法 / 非法四类零写入 /
       Array.isArray(plan.ready) && plan.ready.length === 1 && plan.ready[0] === 'A' &&
       plan.counts?.nodes === 4 &&
       plan.errors.length === 0 &&
+      plan.coordination === null &&
+      validPartitions.ok === true &&
+      validPartitions.coordination.partitions.length === 2 &&
+      validPartitions.order.join(',') === 'A,B,C,D' &&
+      managementOnlyCycle.errors.some((e) => e.code === 'partition-cycle') &&
+      overlappingPartitions.errors.some((e) => e.code === 'partition-node-overlap') &&
+      unknownPartitionNode.errors.some((e) => e.code === 'partition-unknown-node') &&
+      unknownPartitionParent.errors.some((e) => e.code === 'partition-parent-unknown') &&
+      ['partition-max-active-invalid', 'partition-budget-invalid', 'delegation-fanout-invalid', 'coordination-queue-limit-invalid', 'coordination-rate-invalid'].every((code) => invalidLimits.errors.some((e) => e.code === code)) &&
       (afterPlan?.nodes ?? 0) === 0 &&
       committed?.ok === true &&
+      committed.coordination?.partitions?.length === 2 &&
       committed.committed === true &&
       (afterCommit?.nodes ?? 0) === 4 &&
       again?.idempotent === true &&
@@ -643,6 +677,71 @@ check('graphspec: plan 零写入 / 分支+汇合合法 / 非法四类零写入 /
       wish: { ok: wish?.ok, graphPlanRequired: wish?.graphPlanRequired, nodes: wish?.nodes },
     },
   };
+});
+
+check('dispatch: lease capacity bounds plans without acquiring leases', async () => {
+  const { L0ControlService } = await import(pathToFileURL(path.join(root, 'lib', 'service.js')).href);
+  const svc = new L0ControlService({ get: () => undefined }, { workspaceRoot, stateDir: '.l0-control-capacity', maxParallel: 1 }, {});
+  try {
+    const committed = await svc.graphCommit({ nodes: ['A', 'B'].map((nodeId) => ({ nodeId, title: nodeId, acceptance: { kind: 'exists' } })) });
+    const before = await svc.dispatch({ mode: 'interval', dryRun: false });
+    const claimed = await svc.taskClaim({ nodeId: 'A', instanceId: 'ROLE-CODE-01' });
+    const after = await svc.dispatch();
+    const overCapacity = await svc.taskClaim({ nodeId: 'B', instanceId: 'ROLE-CODE-02' });
+    return { ok: committed.ok && before.willDispatch?.length === 1 && claimed.ok && !claimed.alreadyHeld &&
+      !overCapacity.ok && overCapacity.error === 'graph_capacity' &&
+      after.ready?.includes('B') && after.willDispatch?.length === 0 && after.backpressure?.saturated === true,
+      detail: { before: before.willDispatch, claim: claimed.error, after: after.backpressure } };
+  } finally {
+    svc.stopDispatch();
+  }
+});
+
+check('dispatch: child and ancestor limits account for leases and candidates', async () => {
+  const { L0ControlService } = await import(pathToFileURL(path.join(root, 'lib', 'service.js')).href);
+  const svc = new L0ControlService({ get: () => undefined }, { workspaceRoot, stateDir: '.l0-control-partition-capacity', maxParallel: 8 }, {});
+  try {
+    const committed = await svc.graphCommit({
+      nodes: ['A', 'B', 'C', 'D'].map((nodeId) => ({ nodeId, title: nodeId, acceptance: { kind: 'exists' } })),
+      coordination: { enabled: true, maxActive: 3, partitions: [
+        { id: 'root', nodeRefs: [], maxActive: 1 },
+        { id: 'left', parentId: 'root', nodeRefs: ['A', 'B'], maxActive: 1 },
+        { id: 'right', parentId: 'root', nodeRefs: ['C'], maxActive: 1 },
+      ] },
+    });
+    const before = await svc.dispatch({ mode: 'interval', maxPerTick: 4 });
+    const claimed = await svc.taskClaim({ nodeId: 'A', instanceId: 'ROLE-CODE-01' });
+    const after = await svc.dispatch();
+    return { ok: committed.ok && claimed.ok && before.willDispatch?.join(',') === 'A,D' &&
+      after.willDispatch?.join(',') === 'D' && after.backpressure?.maxActive === 3 &&
+      after.backpressure?.activeByPartition?.root === 1 && after.backpressure?.activeByPartition?.left === 1 &&
+      after.plan?.find((item) => item.nodeId === 'C')?.reason.includes('root'), detail: { before, after } };
+  } finally {
+    svc.stopDispatch();
+  }
+});
+
+check('memory: bounded handoff, revision check and report pointer', async () => {
+  const { L0ControlService } = await import(pathToFileURL(path.join(root, 'lib', 'service.js')).href);
+  const ctx = { get: () => undefined };
+  const svc = new L0ControlService(ctx, { workspaceRoot, stateDir: '.l0-control-memory' }, {});
+  let escapedRootRejected = false;
+  try { new L0ControlService(ctx, { workspaceRoot, managementRoot: path.resolve(workspaceRoot, '..', 'outside-management') }, {}); }
+  catch (error) { escapedRootRejected = String(error?.message ?? error).includes('managementRoot'); }
+  const dir = path.join(workspaceRoot, '管理区');
+  fs.writeFileSync(path.join(dir, 'tasks', 'handoff.md'), '旧'.repeat(2000) + '\ncard-tail');
+  fs.writeFileSync(path.join(dir, 'reports', 'prior.md'), '旧'.repeat(2000) + '\nreport-tail');
+  const input = { taskCard: 'handoff', record: 'prior', maxChars: 1000 };
+  const loaded = (await svc.memoryLoad(input)).result;
+  const saved = await svc.memoryWriteback({ taskCard: input.taskCard, summary: '更新结论', expectedCardRevision: loaded.taskCard.revision });
+  const stale = await svc.memoryWriteback({ taskCard: input.taskCard, summary: '过期结论', expectedCardRevision: loaded.taskCard.revision });
+  const missing = await svc.memoryWriteback({ taskCard: 'missing', summary: '无任务卡' });
+  const updated = (await svc.memoryLoad(input)).result;
+  return { ok: escapedRootRejected && loaded.managementDir === dir && loaded.text.length <= 1000 && loaded.truncated &&
+    ['card-tail', 'report-tail', 'handoff-latest'].every((item) => loaded.text.includes(item)) &&
+    saved.ok && fs.existsSync(saved.result.report.path) && updated.text.includes(saved.result.report.name) &&
+    updated.taskCard.revision === saved.result.taskCard.revision && stale.error === 'stale-card-revision' &&
+    missing.error === 'task-card-not-found' };
 });
 
 check('blackboard: cursor 增量 / 超界回退 / 摘要计数 / 上限 40', async () => {
@@ -698,6 +797,7 @@ check('capability: prompt 用能力包/任务上下文，不再有固定"职责"
     contextPack: ['仓库在 F:/x', '只改 src/**'],
   });
   const fallback = buildWorkerPrompt({ role: 'CODE', instanceId: 'role-code-02' });
+  const brief = buildWorkerPrompt({ role: 'CODE', instanceId: 'role-code-03', taskBrief: { objective: 'deliver bounded task', writeScopes: ['src/core/**'], acceptance: ['typecheck passes'], omitted: ['full parent history'] } });
   return {
     ok:
       withCaps.includes('## 能力包') &&
@@ -707,7 +807,9 @@ check('capability: prompt 用能力包/任务上下文，不再有固定"职责"
       !withCaps.includes('职责：') &&
       !fallback.includes('职责：') &&
       fallback.includes('兜底') &&
-      fallback.includes('## 允许的工具'),
+      fallback.includes('## 允许的工具') &&
+      brief.includes('deliver bounded task') && brief.includes('src/core/**') && brief.includes('full parent history') &&
+      brief.includes('expectedCardRevision') && brief.includes('stale-card-revision'),
     detail: {
       capsHasSection: withCaps.includes('## 能力包'),
       noFixedDuty: !withCaps.includes('职责：'),

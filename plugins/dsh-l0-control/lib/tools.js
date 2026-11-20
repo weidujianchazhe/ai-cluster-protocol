@@ -105,6 +105,79 @@ export function buildTools(service                  )                   {
       execute: (args) => service.graphCommit(args ?? {}),
     },
     {
+      name: named('neighbor_digest'),
+      description:
+        '邻域摘要（**只读，不参与任何判定**）：返回**已完成**节点的定长摘要，两个方向——' +
+        '`deps`（纵向：直接上游，深度 1）与 `partition`（横向：同分区）。' +
+        '**纵向优先**：上游是"我依赖的东西"，名额有限时先给上游。' +
+        '**只读 done**（终态），所以同一段历史回放出同一个邻域；**只读 title/spec，不读盘上的产物**。' +
+        '返回里带 `cost.approxTokens`——「让节点知道更多」按 `maxParallel × 每轮上下文` 放大，必须知道买了多少。',
+      parameters: {
+        type: 'object',
+        properties: {
+          nodeId: { type: 'string', description: '要为其构造邻域的节点（必填）' },
+          direction: {
+            type: 'string',
+            description: "感知方向：'partition'（横向，默认）| 'deps'（纵向深度 1）| 'both'",
+          },
+          maxNeighbors: { type: 'number', description: '最多展示几个邻居（默认 5；0=不限但受 charsPerNeighbor 兜住）' },
+          charsPerNeighbor: { type: 'number', description: '每条摘要的字符上限（默认 120）' },
+        },
+        required: ['nodeId'],
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.neighborhoodDigest(args ?? {}),
+    },
+    {
+      name: named('collaboration_map'),
+      description:
+        '协作图（**只读聚合，不参与任何判定**）：从证据的 `contextRefs` 声明算出「谁读了谁」，并接上质量分做对比。' +
+        '返回边列表、每节点入度/出度、**孤岛**（既不引用别人也不被引用）、信息枢纽（被引用最多），' +
+        '以及核心结论：**有耦合 vs 无耦合的平均质量分差**（`quality.delta`）——这是「协作有没有用」的唯一实证指标。' +
+        '样本不足时 `delta=null` 并明确写「不下结论」。注意它是**耦合声明图**：`contextRefs` 由生产者自己填，' +
+        '没有机制验证产物真的引用了对方。',
+      parameters: {
+        type: 'object',
+        properties: {
+          minSample: { type: 'number', description: '判定「耦合与质量有关」所需的最小样本量（默认 3）' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.collaborationMap(args ?? {}),
+    },
+    {
+      name: named('quality_report'),
+      description:
+        '质量报告（**只读聚合，不参与任何判定**）：从已有信号算「过程质量」——' +
+        '证据来源强度（verified/inferred/assumed）、返工次数（attempts）、是否有独立审计。' +
+        '返回每个节点的分数与可解释的 reasons、按 stage / capability 的分组均值、以及最需要关注的 5 个节点。' +
+        '**注意**：缺证据的节点记为 `unknown`（`score=null`），不是 0 分——前者是"还没法判断"，后者会被读成"干砸了"。' +
+        '它**不测产出本身的好坏**（一个 verified 的证据也可能对应平庸的产物）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          stage: { type: 'string', description: '只看某阶段（research/design/build/audit/deliver）' },
+          limit: { type: 'number', description: '返回的节点明细上限（默认 50）' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.qualityReport(args ?? {}),
+    },
+    {
+      name: named('env_check'),
+      description:
+        '开工前环境体检：一次问清「这台机器能不能跑、数据会写到哪、还差什么」。' +
+        '返回宿主服务（缺 agentTeams → 派出的实例当不了 TeamTask owner）、三处数据落点与各盘可用空间、' +
+        '按**实测速率**推算的千级/万级占用，以及 `suggestedMaxAgents`（按会话盘可用空间反推这台机器实际能跑多少）。' +
+        '`ready=false` 时看 `blockers`——那是必须先解决的项。',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      output,
+      execute: () => service.envCheck(),
+    },
+    {
       name: named('graph_status'),
       description: '读图状态：journal 摘要 + 快照 + 能力摘要 + core 投影（缺失 fail-closed）+ 因子巡检；节点为最小投影，默认 50/页。',
       parameters: {
@@ -119,20 +192,65 @@ export function buildTools(service                  )                   {
       execute: (args) => service.graphStatus(args ?? {}),
     },
     {
+      name: named('graph_checkpoint'),
+      description: '为指定分区落检查点：追加 `partition_checkpointed` 事件，返回检查点元数据与 baseSeq。',
+      parameters: {
+        type: 'object',
+        properties: {
+          partitionId: { type: 'string', description: '分区 ID（coordination.partitions[].id）' },
+        },
+        required: ['partitionId'],
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.graphCheckpoint(args ?? {}),
+    },
+    {
+      name: named('graph_recover'),
+      description: '恢复报告：返回最近检查点元数据 + 需重放的事件数（实际重放由调用方用 foldEvents 完成）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          partitionId: { type: 'string', description: '可选：指定分区 ID；省略=返回全图最近检查点' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.graphRecover(args ?? {}),
+    },
+    {
+      name: named('graph_resume_plan'),
+      description:
+        '分区恢复计划：按最近检查点逐节点对比当前状态，返回 resume（接着做）/ skipCompleted（已完成，恢复后绝不能再执行一次）/ drift（检查点说 done 却退回了，journal 被改写须报警）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          partitionId: { type: 'string', description: '可选：指定分区 ID；省略=用全图最近检查点' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.graphResumePlan(args ?? {}),
+    },
+    {
       name: named('dispatch'),
-      description: '派活循环：省略 mode = 只读出计划（不派活）；off（默认）/interval/resident。dryRun 默认 true，仅 dryRun:false 才真的 claim。',
+      description: '查看派活候选与容量。传 mode 可切换定时规划。只生成计划；传 enqueue:true 才按候选真正派发 worker（worker 自己 claim）。',
       parameters: {
         type: 'object',
         properties: {
           mode: { type: 'string', enum: ['off', 'interval', 'resident'], description: '切换到的模式；省略=只读状态' },
           intervalMs: { type: 'number', description: 'interval 间隔毫秒（≥30000）' },
           maxPerTick: { type: 'number', description: '单轮最多派几个（1–32）' },
-          dryRun: { type: 'boolean', description: 'true=只出计划（缺省）；false=真的 claim' },
+          dryRun: { type: 'boolean', description: '默认 true。false 按正式派活口径列出候选，但仍只生成计划。' },
+          enqueue: { type: 'boolean', description: 'true=按候选真正 spawn worker（需活 caller；插件不代领节点）' },
+          role: { type: 'string', description: 'enqueue 时统一使用的职务码（缺省取节点 capability，非法则回退 CODE）' },
+          capability: { type: 'string', description: 'enqueue 时写给 worker 的能力包' },
+          maxEnqueue: { type: 'number', description: '本次最多派几个（缺省=候选数）' },
         },
         additionalProperties: false,
       },
       output,
-      execute: (args) => service.dispatch(args ?? {}),
+      execute: (args, exec) => service.dispatch(args ?? {}, exec?.agent),
     },
     {
       name: named('task_next'),
@@ -175,7 +293,7 @@ export function buildTools(service                  )                   {
         additionalProperties: false,
       },
       output,
-      execute: (args) => service.taskClaim(args),
+      execute: (args, exec) => service.taskClaim(args, exec?.agent),
     },
     {
       name: named('evidence_submit'),
@@ -185,6 +303,7 @@ export function buildTools(service                  )                   {
         properties: {
           nodeId: { type: 'string', description: '节点 ID' },
           artifactPath: { type: 'string', description: '产物路径（相对 workspaceRoot 或绝对）' },
+          fencingToken: { type: 'number', description: 'task_claim 返回的当前节点 fencing token' },
           verifier: { type: 'string', description: '验证器标识（注册表内）' },
           acceptance: { type: 'object', additionalProperties: true, description: '验收条目 {kind, expected}' },
           producer_instance: { type: 'string', description: '生产实例（缺省取 caller 绑定实例）' },
@@ -195,7 +314,7 @@ export function buildTools(service                  )                   {
             description: 'verified=已核验事实 / inferred=线索推断 / assumed=假设。缺省：有 acceptance→verified，无→inferred。仅 verified 能支撑 done',
           },
         },
-        required: ['nodeId', 'artifactPath'],
+        required: ['nodeId', 'artifactPath', 'fencingToken'],
         additionalProperties: false,
       },
       output,
@@ -203,16 +322,17 @@ export function buildTools(service                  )                   {
     },
     {
       name: named('verify_done'),
-      description: '置 done：需 auditor_instance（缺省取 caller 绑定）与 producer_instance；producer≠auditor、verifier 须审计职务，unknown 不得通过。',
+      description: '由当前真实审计 caller 验收并置 done；auditor_instance 仅作一致性提示且必须匹配 caller，producer≠auditor，unknown 不得通过。',
       parameters: {
         type: 'object',
         properties: {
           nodeId: { type: 'string', description: '节点 ID' },
           acceptance: { type: 'object', additionalProperties: true, description: '验收条目' },
+          fencingToken: { type: 'number', description: '当前节点的 task_claim token' },
           producer_instance: { type: 'string', description: '生产实例 ID（审计独立性机检用）' },
-          auditor_instance: { type: 'string', description: '审计实例 ID（缺省取 caller 绑定实例）' },
+          auditor_instance: { type: 'string', description: '审计 caller 的一致性提示；必须与真实 caller 绑定实例一致' },
         },
-        required: ['nodeId'],
+        required: ['nodeId', 'fencingToken'],
         additionalProperties: false,
       },
       output,
@@ -283,6 +403,7 @@ export function buildTools(service                  )                   {
           summary: { type: 'string', description: '本轮结论（必填，建议 1–5 条）' },
           next: { type: 'string', description: '下一步指针' },
           evidence: { type: 'string', description: '证据/文件路径/命令结果摘要' },
+          expectedCardRevision: { type: ['string', 'null'], description: '任务卡当前 SHA-256；写回前做 CAS，已有任务卡必填' },
         },
         required: ['summary'],
         additionalProperties: false,
@@ -319,6 +440,9 @@ export function buildTools(service                  )                   {
           via: { type: 'string', enum: ['auto', 'team', 'activation', 'provider'], description: '组装策略：auto/team=A；activation=B；provider=C' },
           provider: { type: 'string', description: 'provider 名（C 用，缺省 spawn）' },
           heartbeatTtlSec: { type: 'number', description: 'worker 心跳 TTL 秒（worker 按 ≤ TTL/3 续租；缺省 60）' },
+          taskBrief: { type: 'object', additionalProperties: false, description: '最小任务简报：目标/写域/验收/证据引用/租约引用/省略项', properties: {
+            objective: { type: 'string' }, writeScopes: { type: 'array', items: { type: 'string' } }, acceptance: { type: 'array', items: { type: 'string' } }, evidenceRefs: { type: 'array', items: { type: 'string' } }, leaseRef: { type: 'string' }, omitted: { type: 'array', items: { type: 'string' } },
+          } },
           agent: {
             type: 'object',
             additionalProperties: false,
@@ -332,6 +456,9 @@ export function buildTools(service                  )                   {
               label: { type: 'string', description: '展示标签（等同 label）' },
               index: { type: 'number', description: '同职务序号（等同 index）' },
               heartbeatTtlSec: { type: 'number', description: '心跳 TTL 秒（等同 heartbeatTtlSec）' },
+              taskBrief: { type: 'object', additionalProperties: false, description: '最小任务简报', properties: {
+                objective: { type: 'string' }, writeScopes: { type: 'array', items: { type: 'string' } }, acceptance: { type: 'array', items: { type: 'string' } }, evidenceRefs: { type: 'array', items: { type: 'string' } }, leaseRef: { type: 'string' }, omitted: { type: 'array', items: { type: 'string' } },
+              } },
             },
           },
           transport: {

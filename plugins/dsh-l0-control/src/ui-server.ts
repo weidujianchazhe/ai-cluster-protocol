@@ -13,8 +13,16 @@ export interface UiServerOptions {
   port?: number;
   /** 额外允许的 Origin（反代/自定义域名场景）；回环 host 默认已放行，无需在此重复列出。 */
   allowedOrigins?: string[];
-  /** `sessionId` 来自 `?sessionId=`；`workspaceRoot` 来自 `?workspaceRoot=`；`sinceSeq` 来自 `?sinceSeq=`（黑板增量）。 */
-  getSnapshot: (sessionId?: string, workspaceRoot?: string, sinceSeq?: number) => unknown | Promise<unknown>;
+  /**
+   * `sessionId` 来自 `?sessionId=`；`workspaceRoot` 来自 `?workspaceRoot=`；
+   * `sinceSeq` 来自 `?sinceSeq=`（黑板增量）；`withRecovery` 来自 `?withRecovery=1`（按需带恢复面）。
+   */
+  getSnapshot: (
+    sessionId?: string,
+    workspaceRoot?: string,
+    sinceSeq?: number,
+    withRecovery?: boolean,
+  ) => unknown | Promise<unknown>;
   /** 工作区 registry 列表 + 各自 counts（`/ui/workspaces`）。 */
   getWorkspaces?: () => unknown | Promise<unknown>;
   /** 用目标 session 的 Agent 重新读一次 team_status，填充该 session 快照。 */
@@ -166,6 +174,7 @@ export function createUiHandler(
     let sessionId: string | undefined;
     let workspaceRoot: string | undefined;
     let sinceSeq: number | undefined;
+    let withRecovery: boolean | undefined;
     try {
       const query = new URLSearchParams(rawUrl.split('?')[1] ?? '');
       const value = query.get('sessionId');
@@ -174,10 +183,14 @@ export function createUiHandler(
       if (ws && String(ws).trim()) workspaceRoot = String(ws).trim();
       const since = query.get('sinceSeq');
       if (since && Number.isFinite(Number(since))) sinceSeq = Math.max(0, Math.floor(Number(since)));
+      // 恢复面按需：折叠 journal + 重放检查点，千级规模下不该每次快照都跑。
+      const withRec = query.get('withRecovery');
+      if (withRec === '1' || withRec === 'true') withRecovery = true;
     } catch {
       sessionId = undefined;
       workspaceRoot = undefined;
       sinceSeq = undefined;
+      withRecovery = undefined;
     }
     const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
     const origin = allowedOrigin(req, options.allowedOrigins);
@@ -443,7 +456,7 @@ export function createUiHandler(
       return;
     }
     try {
-      const snapshot = await options.getSnapshot(sessionId, workspaceRoot, sinceSeq);
+      const snapshot = await options.getSnapshot(sessionId, workspaceRoot, sinceSeq, withRecovery);
       send(res, 200, snapshot);
     } catch (error) {
       send(res, 500, { ok: false, error: 'snapshot-failed', message: String((error as Error)?.message ?? error) });

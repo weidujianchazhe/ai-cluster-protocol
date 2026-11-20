@@ -6,7 +6,11 @@
         journalFile: 'journal.jsonl'
         snapshotFile: 'snapshot.json'
         sandboxMode: 'danger-full-access'
-        maxParallel: 6
+        # 32 并发标定：把全图活跃租约上限从 6 提到 64。
+        # 不改这一项的话，32 个 worker 里只有 6 个能 claim 成功，
+        # 其余会以 graph_capacity 被拒——那测到的是「容量闸门正确」，
+        # 而不是「宿主能不能吃下 32 个并发 session」。
+        maxParallel: 64
         defaultBudgetTokens: 0
         projectionEnabled: true
         toolPrefix: ''
@@ -14,3 +18,27 @@
         persistenceDir: 'core-state'
         lockWaitMs: 15000
         lockTtlMs: 1800000
+
+        # ── 宿主容量两层（本插件接管不了，只能替你调大）──
+        # 这两层不放开，上面的 maxParallel 配多大都没用：
+        #   teamMemberLimit   → 宿主 agentTeams.maxMembers（默认 16）
+        #   subagentMaxActive → 宿主 subagents.maxActiveSubagents（默认 8）
+        # 两者都是 Cordis 配置项；前者构造时传给 roster，后者是活引用（改完立即生效）。
+        # 启用协作时插件会自动抬到下面的值，无需手动执行任何命令。
+        teamMemberLimit: 256
+        subagentMaxActive: 256
+
+        # ── 常驻协调器 ──
+        # 做两件确定性的事：reap（回收过期租约 + 清扫孤儿 submitted）、
+        # 审计路由（节 submitted 超时无人验时自动派审计实例）。它**不派活**。
+        # 关掉它不会有功能缺失，但卡住的节点就只能靠 dispatch tick 或手动回收。
+        coordinatorEnabled: true
+        coordinatorIntervalMs: 30000
+        # 节点 submitted 超过该毫秒数仍无人验 → 自动派审计实例（0 = 关闭自动派审计，reap 照常）
+        auditDispatchAfterMs: 120000
+        auditRole: 'AUDIT_CODE'
+
+        # ── 审计窗口 ──
+        # verify_done 需要活租约，而生产期 TTL 默认 60s 短于一轮真审计（复核哈希/复算数值）。
+        # 证据落账时由系统把租约延到这个窗口；0 = 不延长。
+        auditLeaseTtlSec: 600

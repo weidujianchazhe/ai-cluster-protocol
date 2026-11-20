@@ -67,7 +67,18 @@ const baseOpts = (over = {}) => ({
   }
   const r = planDispatchTick(store, baseOpts({ maxPerTick: 2, dryRun: false }));
   check("maxPerTick 生效", r.willDispatch.length === 2, `got=${r.willDispatch.length}`);
-  check("超出上限的节点被说明", r.plan.some((p) => p.action === "skip" && p.reason.includes("maxPerTick")), JSON.stringify(r.plan.map((p) => p.action)));
+  // 第 6 轮把「本轮已达上限 maxPerTick=N」换成更精确的口径：同时给出
+  // tick / active / rate / queue 四个扣减项（否则看不出到底是被哪一项卡住的）。
+  check(
+    "超出上限的节点被说明",
+    r.plan.some(
+      (p) =>
+        p.action === "skip" &&
+        p.reason.includes("本轮额度已用尽") &&
+        p.reason.includes("tick=2"),
+    ),
+    JSON.stringify(r.plan.map((p) => ({ action: p.action, reason: p.reason }))),
+  );
 }
 
 // 5. 停滞节点被巡检拦截

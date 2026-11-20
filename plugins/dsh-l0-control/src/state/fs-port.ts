@@ -114,8 +114,29 @@ export class NodeFsPort implements FsPort {
     }
   }
 
+  /**
+   * 删文件：**用 `unlinkSync`，不用 `rmSync`**。
+   *
+   * 实测（Node v24.9.0 / Windows，某工作区目录下）：
+   * `fs.rmSync(file, { force: true, recursive: false })` 返回成功、不抛错，
+   * **文件仍然存在**；同一路径的 `unlinkSync` 正常删除。
+   * 换成 `os.tmpdir()` 下的同一段代码，`rmSync` 又能删掉——也就是说这是
+   * 工作区路径特有的静默失败，不是「Node 版本问题」，也不是「调用方式问题」。
+   *
+   * 后果落在这里特别严重：`remove()` 的唯一调用点是 `Journal.release()` 删锁。
+   * 锁删不掉 → `lockRecord` 置 null 但盘上锁还在 → 下一次 `open()` 看到
+   * "另一个活写者持有锁" → `STATE_LOCKED`。也就是**正常 close 之后再也打不开**，
+   * 报错信息还指向"上一个 writer 没 close"，排查方向完全错。
+   *
+   * ENOENT 视为成功（幂等删除）；其它错误照抛，不吞。
+   */
   async remove(file: string): Promise<void> {
-    fs.rmSync(file, { force: true, recursive: false });
+    try {
+      fs.unlinkSync(file);
+    } catch (error) {
+      if (isNotFound(error)) return;
+      throw error;
+    }
   }
 
   async mkdirp(dir: string): Promise<void> {
@@ -124,6 +145,17 @@ export class NodeFsPort implements FsPort {
 
   async truncate(file: string, size: number): Promise<void> {
     fs.truncateSync(file, size);
+  }
+
+  /**
+   * 改名/移动（journal 分段滚动用：`journal.jsonl` → `journal.0001.jsonl`）。
+   *
+   * 用 `renameSync` 而不是「读+写+删」：后者不是原子的，中间崩溃会**同时**留下
+   * 旧文件与新文件，恢复时就分不清哪份是权威。同目录内 rename 在 NTFS/ext4 上
+   * 都是原子 replace（目标已存在时覆盖）。
+   */
+  async rename(from: string, to: string): Promise<void> {
+    fs.renameSync(from, to);
   }
 }
 
@@ -206,17 +238,25 @@ export class MemoryFsPort implements FsPort {
   }
 
   async listDir(dir: string): Promise<DirEntry[]> {
-    const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+    // 分隔符必须**两种都认**：键来自 `path.join`，Windows 下是反斜杠，
+    // 而这里曾只按 `/` 拼前缀 —— 于是 `listDir` 在 Windows 的内存端口上恒返回空。
+    // 这个 bug 平时看不见（没有调用方依赖它），但 journal 分段用它找已封存段：
+    // 恒空 ⇒ 只读到活动段 ⇒ 老读者那套「安静地少读一半」就会重现。必须修端口而不是绕。
+    const normalized = dir.replace(/\\/g, '/');
+    const prefix = normalized.endsWith('/') ? normalized : `${normalized}/`;
     const seen = new Map<string, DirEntry>();
+    const keyOf = (file: string) => file.replace(/\\/g, '/');
     for (const file of this.files.keys()) {
-      if (!file.startsWith(prefix)) continue;
-      const rest = file.slice(prefix.length);
+      const key = keyOf(file);
+      if (!key.startsWith(prefix)) continue;
+      const rest = key.slice(prefix.length);
       if (!rest || rest.includes('/')) continue;
       seen.set(rest, { name: rest, type: 'file' });
     }
     for (const sub of this.dirs) {
-      if (!sub.startsWith(prefix)) continue;
-      const rest = sub.slice(prefix.length);
+      const key = keyOf(sub);
+      if (!key.startsWith(prefix)) continue;
+      const rest = key.slice(prefix.length);
       if (!rest || rest.includes('/')) continue;
       seen.set(rest, { name: rest, type: 'directory' });
     }
@@ -235,6 +275,13 @@ export class MemoryFsPort implements FsPort {
     const entry = this.files.get(file);
     if (!entry) return;
     this.files.set(file, { content: entry.content.slice(0, size), mtimeMs: ++this.clock });
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const entry = this.files.get(from);
+    if (!entry) return;
+    this.files.delete(from);
+    this.files.set(to, { content: entry.content, mtimeMs: ++this.clock });
   }
 }
 
@@ -346,6 +393,11 @@ export class DshFsPort implements FsPort {
 
   async remove(): Promise<void> {
     throw new StateError('STATE_READONLY', '宿主 fs 端口不提供删除；由调用方决定策略');
+  }
+
+  /** 宿主 fs 同样不提供原子改名：分段滚动在宿主端口上不可用（fail-closed）。 */
+  async rename(): Promise<void> {
+    throw new StateError('STATE_READONLY', '宿主 fs 端口不提供原子改名；分段滚动需本地 fs 端口');
   }
 
   async mkdirp(dir: string): Promise<void> {

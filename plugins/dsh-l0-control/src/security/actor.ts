@@ -49,9 +49,28 @@ export function pickInstanceFromArgs(
 }
 
 /** 解析调用者：永远返回一个 actor（不抛错），无法判定时是 plugin。 */
-export function resolveActor(input: ResolveActorInput): ActorLike {
-  const { args, exec, tenant, roleOfInstance } = input;
-  const picked = pickInstanceFromArgs(args, roleOfInstance);
+export function resolveActor(input: ResolveActorInput & {
+  /**
+   * 把 `producer_instance` 排除在候选之外。
+   *
+   * **只有审计动作该置 true**，理由不是风格而是语义：
+   * `producer_instance` 声明的是**被审计对象**，不是「我以谁的身份行事」。
+   * 把它当 actor，等于让被告替法官签字——本轮真机事故就是这么来的：
+   * 审计实例按契约**省略** `auditor_instance`（服务会用自己的实例名），
+   * 于是候选落到 `producer_instance` → actor 被认成生产者 → 判自审 → 403，
+   * **任何合法审计都必然失败**。
+   *
+   * 而 `evidence_submit` 恰恰相反：它的 actor 就该是生产者，所以那里不能排除。
+   */
+  excludeProducer?: boolean;
+}): ActorLike {
+  const { args, exec, tenant, roleOfInstance, excludeProducer } = input;
+  const picked = excludeProducer
+    ? pickInstanceFromArgs(
+        args ? { instanceId: args.instanceId, auditor_instance: args.auditor_instance, auditorInstance: args.auditorInstance } : args,
+        roleOfInstance,
+      )
+    : pickInstanceFromArgs(args, roleOfInstance);
   if (picked) {
     const role = roleOfInstance(picked) as string;
     return { id: picked, kind: 'agent', tenant, roles: [role] };

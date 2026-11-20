@@ -6,12 +6,21 @@
  *  - 门面自己持有 core store 单例；N4 的持久化层可用 `configureCore({store})` 注入同一 store；
  *  - 所有动作都同步返回（N2 用 `await` 兼容同步值）。
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Store } from "./store.ts";
 import type { NodeRecord } from "./types.ts";
 import { addNode, getNode, listNodes, edges, doneCredential, doneCredentialWithReason, rejectNode, setStatus, snapshot } from "./graph.ts";
 import { bootstrap, installReadyHook, readySet, recomputeReady } from "./ready.ts";
-import { claim, currentLease, renew } from "./leases.ts";
+import { assertFencing, claim, currentLease, expire, extendForAudit, renew } from "./leases.ts";
+import { qualityReport } from "./quality.ts";
+import { collaborationMap } from "./collaboration.ts";
+import { neighborhoodOf } from "./neighborhood.ts";
+
+/** 审计窗口的默认租约长度（秒）。理由见 `extendForAudit`。 */
+export const DEFAULT_AUDIT_LEASE_TTL_SEC = 600;
 import { addArtifact, addEvidence, getArtifact } from "./evidence.ts";
+import { assertBudget, budgetView } from "./budget.ts";
+import { checkpointPartition, planPartitionResume, recoverFromCheckpoint } from "./checkpoint.ts";
 import {
   blockingDecisions,
   chooseNow,
@@ -29,6 +38,7 @@ import { normalizeDispatchOptions, planDispatchTick } from "./dispatcher.ts";
 import type { Lease } from "./types.ts";
 
 let sharedStore: Store | null = null;
+const storeScope = new AsyncLocalStorage<Store>();
 const wired = new WeakSet<Store>();
 
 function wire(store: Store): Store {
@@ -45,13 +55,21 @@ export function configureCore(options: { store?: Store | null } = {}): void {
   if (sharedStore) wire(sharedStore);
 }
 
-/** 取门面 store（首次调用创建内存 store 并挂 ready 钩子）。 */
+/** 显式异步作用域 store 优先；无持久化作用域时保留测试用内存默认值。 */
 export function coreStore(): Store {
+  const scoped = storeScope.getStore();
+  if (scoped) return scoped;
   if (!sharedStore) sharedStore = wire(new Store());
   return sharedStore;
 }
 
-/** 仅测试用：丢弃单例。 */
+/** 在异步调用链内绑定 store，避免多工作区交错时互相覆盖。 */
+export function withCoreStore<T>(store: Store, fn: () => T): T {
+  wire(store);
+  return storeScope.run(store, fn);
+}
+
+/** 仅测试用：丢弃默认内存 store。 */
 export function resetCore(): void {
   sharedStore = null;
 }
@@ -218,14 +236,18 @@ export interface EvidenceInput extends Record<string, unknown> {
   nodeId?: string;
   artifactPath?: string;
   verifier?: string;
+  fencingToken?: number;
   acceptance?: Record<string, unknown>;
   resolved?: string;
   /** 证据来源：verified / inferred / assumed（缺省 inferred）。verified 需显式声明；仅 verified 能支撑 done。 */
   provenance?: string;
+  /** 本次证据声明的 token 消耗（计入全图 / 分区 / 节点预算）。 */
+  usageTokens?: number;
 }
 
 export interface VerifyDoneInput extends Record<string, unknown> {
   nodeId?: string;
+  fencingToken?: number;
   acceptance?: Record<string, unknown>;
 }
 
@@ -398,6 +420,9 @@ export function graphStatus(options: GraphStatusOptions = {}): Record<string, un
   return {
     ok: true,
     version: Number(store.state.meta.get("graph_version") ?? "1"),
+    coordination: JSON.parse(store.state.meta.get("graph_coordination") ?? "null"),
+    /** 预算视图（只读）：全图/分区/节点已用与上限，供面板与人工核对。 */
+    budget: budgetView(store),
     ready: readySet(store),
     counts: {
       nodes: total,
@@ -430,15 +455,125 @@ export function graphStatus(options: GraphStatusOptions = {}): Record<string, un
   };
 }
 
+/**
+ * 回收过期租约（**写动作**，与 `dispatchPlan` 的只读契约分开）。
+ *
+ * 为什么必须有这个生产入口：`leases.expire()` 一直是**只有测试调用**的死代码。
+ * 后果不是「晚一点回收」，而是**永久卡死**：
+ *
+ *   1. worker 崩溃 → 不再续租 → `expires_at` 到期；
+ *   2. `leaseCapacity` 已经跳过过期租约，所以**容量看起来是空的**；
+ *   3. 但节点状态仍是 `claimed`，`readySet` 不含它 → 调度器永远看不到它；
+ *   4. 新 worker 直接 claim 它 → 抛 `lease_expired`「请先 expire 或 takeover」；
+ *   5. 于是这个节点既不在 ready、也不能被 claim、也没有任何定时器会救它。
+ *
+ * 这是「四条路全部堵死」的状态，只能靠人手动 expire/takeover 才出得来。
+ *
+ * 语义边界：
+ *  - 只依赖**已过期**这一条事实（`expires_at <= now`），不猜 worker 是否真的死了；
+ *    租约本来就定义了「多久没心跳就不再算你持有」，到点回收是对契约的执行，不是猜测；
+ *  - 回收即写 `lease_expired` 事件 + 节点回 `ready` + `attempts+1`，全部走 journal，
+ *    因此跨重启语义自然成立（fold 重放后租约不会复活）；
+ *  - 幂等：没有过期租约时零 journal 写入、零分配。
+ */
+export function reapExpiredLeases(raw: Record<string, unknown> = {}): Record<string, unknown> {
+  const store = coreStore();
+  const nowRaw = Number(raw.now);
+  const now = Number.isFinite(nowRaw) && nowRaw > 0 ? nowRaw : store.nowMs();
+  const reaped = expire(store, { now });
+  /**
+   * 第二遍清扫：**孤儿 submitted**。
+   *
+   * `expire()` 的遍历源是 `store.state.leases` —— 只有**还存在**的租约才会被它看到。
+   * 所以「租约已经被删掉、节点却留在 submitted/verifying」的节点永远进不了那个循环，
+   * 于是第一层修复（`expire()` 里补 submitted 分支）对它们**零作用**。
+   *
+   * 这不是理论情况：本轮真派 Agent 时，第一层修复上线**之前**就已经这样卡住了 7 个节点
+   * （M8-01/03/04/05/06/07/MEASURE-01），它们 claim 拒（要求 ready）、verify 拒（要求活租约），
+   * 而唯一出口 `rejectNode` 只在 `verifyDone` 里被调用。**永久不可达**。
+   *
+   * 判据只有一条事实：**状态 ∈ {submitted, verifying} ∧ 该节点没有租约** → 驳回。
+   * **有租约的一律不碰**——租约是权威存活证明，正在验的节点不能被误驳。
+   */
+  const orphans: string[] = [];
+  for (const node of store.state.nodes.values()) {
+    if (node.status !== "submitted" && node.status !== "verifying") continue;
+    if (store.state.leases.has(node.node_id)) continue; // 有租约 = 还活着，不动
+    try {
+      rejectNode(store, node.node_id, "orphan_submitted", {
+        detail: { fromStatus: node.status, why: "submitted-without-lease" },
+        at: store.nowIso(),
+      } as never);
+      orphans.push(node.node_id);
+    } catch {
+      // 单个节点驳回失败不得中断整轮清扫；下一轮还会命中它
+    }
+  }
+  const nodes = reaped.map((nodeId) => {
+    const node = store.state.nodes.get(nodeId);
+    return {
+      nodeId,
+      status: node?.status ?? null,
+      attempts: node?.attempts ?? null,
+      title: node?.title ?? null,
+    };
+  });
+  // 回收后必须重算 ready：`setStatus(..., 'ready')` 只是把单个节点放回 ready，
+  // 而依赖它解锁的下游要等重算——虽然 expire 只回退到 ready 不解锁下游（下游
+  // 依赖的是 done，不是 ready），这里重算的收益是**把非法 ready 降回去**
+  // （比如依赖后来被驳回的节点），顺手做掉比留一个隐式不一致好。
+  let ready = readySet(store);
+  // 有孤儿被清扫时也要重算：`rejectNode` 只把单节点放回 ready，
+  // 「非法 ready」（依赖后来被驳回的节点）要等重算才降下去。
+  // 只写过期租约那一支会漏掉「本轮只有孤儿、没有过期租约」的情况。
+  if (reaped.length || orphans.length) {
+    recomputeReady(store, { reason: "lease_expired", at: store.nowIso() });
+    ready = readySet(store);
+  }
+  const liveLeases = [...store.state.leases.values()].filter((lease) => lease.expires_at > now);
+  return {
+    ok: true,
+    now,
+    reaped,
+    count: reaped.length,
+    // 孤儿清扫必须单独报出来：把两类回收混成 `count` 会让运维以为「租约过期了」，
+    // 而孤儿根本没有租约——两者的处置与根因不同，报告里不能合并。
+    orphans,
+    orphanCount: orphans.length,
+    nodes,
+    leases: {
+      total: store.state.leases.size,
+      live: liveLeases.length,
+      expired: store.state.leases.size - liveLeases.length,
+    },
+    ready,
+    hint: reaped.length || orphans.length
+      ? `已回收 ${reaped.length} 个过期租约 + 清扫 ${orphans.length} 个孤儿 submitted，节点回到 ready（attempts 已 +1）；下一轮 tick 即可重新派发`
+      : "没有过期租约，也没有孤儿 submitted（租约是权威存活证明：未到期就不动它）",
+  };
+}
+
 /** 派活计划（只读）。core 层包装：service 只传原始选项，不直接碰 store。 */
 export function dispatchPlan(raw: Record<string, unknown>): Record<string, unknown> {
   const store = coreStore();
-  const options = normalizeDispatchOptions(raw as never, Date.now());
+  const activeCount = [...store.state.leases.values()].filter((lease) => lease.expires_at > store.nowMs()).length;
+  const options = normalizeDispatchOptions({
+    ...raw,
+    activeCount,
+    maxActive: raw.maxActive ?? raw.maxParallel,
+    currentQueueLength: raw.currentQueueLength ?? 0,
+    maxQueuedTasks: raw.maxQueuedTasks,
+    ratePerSecond: raw.ratePerSecond,
+    dispatchedThisSecond: raw.dispatchedThisSecond,
+    coordination: JSON.parse(store.state.meta.get("graph_coordination") ?? "null"),
+  } as never, store.nowMs());
   const tick = planDispatchTick(store, options);
   return {
     ok: true,
     mode: options.mode,
     dryRun: options.dryRun,
+    limits: { maxQueuedTasks: options.maxQueuedTasks, ratePerSecond: options.ratePerSecond, maxActive: options.maxActive },
+    coordination: JSON.parse(store.state.meta.get("graph_coordination") ?? "null"),
     intervalMs: options.intervalMs,
     maxPerTick: options.maxPerTick,
     dispatcherInstance: options.dispatcherInstance,
@@ -449,6 +584,12 @@ export function dispatchPlan(raw: Record<string, unknown>): Record<string, unkno
     willDispatch: tick.willDispatch,
     summary: tick.summary,
     hint: tick.hint ?? null,
+    backpressure: tick.backpressure,
+    /**
+     * 按闸门汇总的跳过计数。必须透传到门面之外：`plan[].gate` 是逐节点明细，
+     * 而「这一轮为什么只派了 3 个」要的是分组计数——面板和日志主要看这一份。
+     */
+    gates: tick.gates ?? {},
   };
 }
 
@@ -463,18 +604,42 @@ export function dispatchPlan(raw: Record<string, unknown>): Record<string, unkno
  */
 export function nextTask(input: NextTaskInput = {}): Record<string, unknown> {
   const store = coreStore();
+  /**
+   * 先回收过期租约，再算 ready。
+   *
+   * 这是 worker/Lead 唯一的「我现在能干什么」入口，也是崩溃 worker 的唯一现场：
+   * 它手里的租约到期后，节点仍停在 `claimed`、既不在 ready 也不能被 claim。
+   * 在这里回收，等于「问一次就自愈」——不需要谁记得去调一个专门的维护动作。
+   *
+   * 放在 `recomputeReady` 之前：回收会把节点放回 ready，重算才能把它算进就绪集。
+   */
+  const reaped = expire(store, {});
   recomputeReady(store, { reason: "recompute" });
-  const ready = listNodes(store).filter((n) => n.status === "ready");
+  /**
+   * 用 `readySet()` 而不是 `listNodes().filter(...)`。
+   *
+   * 两者对 ready 节点的**顺序完全相同**（同一比较器：`created_at` → `node_id`），
+   * 但 `listNodes()` 会先全量排序、再对**每个**节点 `cloneNode()`；而 `readySet()`
+   * 只排序就绪子集、只产出 id。
+   *
+   * 为什么这里值得改：`task_next` 是 worker 唯一问「我现在能干什么」的入口，
+   * 千节点实测一次跑里被调 **2479 次**才完成 1000 个节点。每次克隆全图两次
+   * （本函数一次 + `recomputeReady` 里一次）是纯粹的固定税。
+   */
+  const ready = readySet(store);
   const role = input.role?.trim();
   const candidates = role
-    ? ready.filter((n) => (n.capability ?? "").toUpperCase() === role.toUpperCase())
+    ? ready.filter((nodeId) => ((getNode(store, nodeId)?.capability ?? "") as string).toUpperCase() === role.toUpperCase())
     : ready;
-  const task = candidates[0] ?? null;
+  const taskId = candidates[0] ?? null;
+  const task = taskId ? getNode(store, taskId) ?? null : null;
   return {
     ok: true,
     role: role ?? null,
-    ready: ready.map((n) => n.node_id),
+    ready,
     task: task ? minimalNode(task) : null,
+    // 只在本轮真的回收了东西时出现：让调用方知道「刚才多出来的候选是从哪来的」。
+    ...(reaped.length > 0 ? { reaped } : {}),
   };
 }
 
@@ -487,7 +652,8 @@ function claimTaskImpl(input: ClaimTaskInput): Record<string, unknown> {
   const owner =
     pickString(raw, ALIASES.instanceId) ?? input.instanceId ?? input.role ?? "agent";
   const existing = currentLease(store, nodeId);
-  if (existing && existing.owner === owner) {
+  const now = store.nowMs();
+  if (existing && existing.owner === owner && existing.expires_at > now) {
     // 历史残留修复：租约还在、节点却被驳回成 ready（老版本 dropLease 不落 journal，
     // 重启后 lease 复活）。以租约为准把状态补回 claimed，否则该节点永远卡在
     // 「ready + 已被持有」：claim 报 alreadyHeld、submit 不推进、verify 判 invalid-state。
@@ -502,7 +668,21 @@ function claimTaskImpl(input: ClaimTaskInput): Record<string, unknown> {
       node: briefNode(getNode(store, nodeId) as NodeRecord),
     };
   }
-  const lease: Lease = claim(store, nodeId, owner, { ttlSec: 600 });
+  const hostLimit = Number(raw.hostLimit);
+  const ratePerSecond = Number(raw.ratePerSecond);
+  // 这里**刻意不自动回收**过期租约。
+  //
+  // `leases.claim()` 的「存在过期租约，请先 expire 或 takeover」是一条有意保留的
+  // 契约：它阻止「过期租约被悄悄续成一个新 token」这种静默的 token 轮转。
+  // 回收由**显式路径**负责（`reapExpiredLeases`：`task_next` 与每次 dispatch/tick
+  // 都会先跑一遍），所以调用方按契约拿到 `lease_expired` 时，正确的动作是
+  // 重新 `task_next`（触发回收）再一次 `task_claim`——而不是让 claim 自己偷偷回收。
+  const lease: Lease = claim(store, nodeId, owner, {
+    ttlSec: 600,
+    now,
+    hostLimit: Number.isSafeInteger(hostLimit) && hostLimit > 0 ? hostLimit : undefined,
+    ratePerSecond: Number.isFinite(ratePerSecond) && ratePerSecond > 0 ? ratePerSecond : undefined,
+  });
   const node = getNode(store, nodeId) as NodeRecord;
   return {
     ok: true,
@@ -684,6 +864,9 @@ function submitEvidenceImpl(input: EvidenceInput): Record<string, unknown> {
   if (!artifactPath) return { ok: false, error: "artifact-path-required" };
   const node = getNode(store, nodeId);
   if (!node) return { ok: false, error: "node-not-found", nodeId };
+  const fencingToken = Number(input?.fencingToken);
+  if (!Number.isFinite(fencingToken) || !node.assignee) return { ok: false, error: "fencing-token-required", nodeId };
+  assertFencing(store, nodeId, node.assignee, fencingToken);
   if (node.status === "done") {
     return { ok: false, error: "evidence-after-done", nodeId, hint: "done 节点不再接受新证据" };
   }
@@ -744,6 +927,21 @@ function submitEvidenceImpl(input: EvidenceInput): Record<string, unknown> {
   }
 
   const attemptNo = pickNumber(raw, ALIASES.attemptNo) ?? countEvidence(store, nodeId) + 1;
+  // 预算准入：这笔证据声明的 token 增量不能突破全图 / 分区 / 节点上限。
+  const usageRaw = Number(pickAlias(raw, ALIASES.usageTokens) ?? 0);
+  const usageTokens = Number.isFinite(usageRaw) && usageRaw > 0 ? Math.floor(usageRaw) : 0;
+  try {
+    assertBudget(store, nodeId, usageTokens);
+  } catch (error) {
+    return {
+      ok: false,
+      error: (error as { code?: string })?.code ?? "budget_exceeded",
+      gate: (error as { gate?: string })?.gate ?? "budget",
+      message: (error as Error).message,
+      nodeId,
+      usageTokens,
+    };
+  }
   const evidenceId =
     pickString(raw, ALIASES.evidenceId) ?? `EVD-${nodeId}-${attemptNo}-${sha256.slice(0, 8)}`;
   // P1-8 来源门禁的诚实缺省：有 acceptance 且由本插件对真实产物机器判定（exists/sha256/contains）
@@ -764,6 +962,9 @@ function submitEvidenceImpl(input: EvidenceInput): Record<string, unknown> {
       attemptNo,
       at: input.at ? String(input.at) : undefined,
       provenance: (pickString(raw, ["provenance"]) ?? input.provenance ?? provenanceDefault) as never,
+      usageTokens,
+      // 因果标注（可选）：透传给 addEvidence，由它做存在性/自引用校验
+      contextRefs: (input as { contextRefs?: unknown }).contextRefs as never,
     });
   } catch (error) {
     return {
@@ -777,6 +978,16 @@ function submitEvidenceImpl(input: EvidenceInput): Record<string, unknown> {
   if (acceptance.verdict === "pass" && (node.status === "claimed" || node.status === "running")) {
     setStatus(store, nodeId, "submitted", { reason: "submitted", notify: false });
     advanced = "submitted";
+    // 进入「等审计」：由**系统**把租约延到审计窗口。
+    //
+    // `verify_done` 要求活租约，而默认 TTL 是给生产阶段定的（60 s）。worker 提交后通常
+    // 不再心跳，审计方又没有 fencingToken —— 没人能续这个租约，于是到期后节点卡在 submitted。
+    // 本轮就是这样连环卡死 7 个节点，最后靠两层 expire 修复兜底才捞回来。
+    // 在这里延长是**最省的一次**：证据落账的那一刻就知道「接下来要审计」。
+    // 失败不影响提交结果（延长是优化，不是提交前提）。
+    try {
+      extendForAudit(store, nodeId, Number(input.auditLeaseTtlSec ?? DEFAULT_AUDIT_LEASE_TTL_SEC));
+    } catch { /* 延长失败不改变已提交的事实 */ }
   }
 
   const result: Record<string, unknown> = {
@@ -809,6 +1020,9 @@ export function verifyDone(input: VerifyDoneInput): Record<string, unknown> {
   if (!nodeId) return { ok: false, error: "node-id-required" };
   const node = getNode(store, nodeId);
   if (!node) return { ok: false, error: "node-not-found", nodeId };
+  const fencingToken = Number(input?.fencingToken);
+  if (!Number.isFinite(fencingToken) || !node.assignee) return { ok: false, error: "fencing-token-required", nodeId };
+  assertFencing(store, nodeId, node.assignee, fencingToken);
   if (node.status === "done") {
     return { ok: true, alreadyDone: true, node: briefNode(node), promoted: [] };
   }
@@ -979,7 +1193,14 @@ export function graphPlan(spec: unknown): Record<string, unknown> {
 export function graphCommit(spec: unknown): Record<string, unknown> {
   const store = coreStore();
   const result = commitGraph(store, spec as never);
-  return { ...result };
+  const nodes = listNodes(store);
+  let done = 0;
+  let blocked = 0;
+  for (const node of nodes) {
+    if (node.status === "done") done += 1;
+    else if (node.status === "blocked") blocked += 1;
+  }
+  return { ...result, ready: readySet(store), counts: { nodes: nodes.length, edges: edges(store).length, done, blocked } };
 }
 
 /** 节点上尚未落地的闸门决策（信息性；不参与 core 的 done 判定）。 */
@@ -1041,6 +1262,58 @@ export function coreCapabilities(): Record<string, unknown> {
   };
 }
 
+/** 为指定分区落检查点（追加 `partition_checkpointed` 事件）。 */
+export function graphCheckpoint(input: { partitionId: string }): Record<string, unknown> {
+  const store = coreStore();
+  const partitionId = String(input?.partitionId ?? "").trim();
+  if (!partitionId) {
+    return { ok: false, error: "partition-id-required" };
+  }
+  try {
+    const coordination = JSON.parse(store.state.meta.get("graph_coordination") ?? "null");
+    const checkpoint = checkpointPartition(store, partitionId, coordination);
+    return { ok: true, checkpoint, baseSeq: checkpoint.baseSeq };
+  } catch (error) {
+    return { ok: false, error: "checkpoint-failed", message: (error as Error).message };
+  }
+}
+
+/** 恢复报告：返回最近检查点元数据 + 需重放的事件数（实际重放由调用方用 `foldEvents` 完成）。 */
+export function graphRecover(input: { partitionId?: string }): Record<string, unknown> {
+  const store = coreStore();
+  const partitionId = input?.partitionId ? String(input.partitionId).trim() : undefined;
+  const report = recoverFromCheckpoint(store, partitionId);
+  return {
+    ok: report.ok,
+    checkpoint: report.checkpoint ?? null,
+    baseSeq: report.baseSeq,
+    replayed: report.replayed,
+    state: report.state ?? null,
+    error: report.error ?? null,
+  };
+}
+
+/** 分区恢复计划：明确区分「接着做 / 已完成必须跳过 / 状态退回须报警」。 */
+export function graphResumePlan(input: { partitionId?: string }): Record<string, unknown> {
+  const store = coreStore();
+  const partitionId = input?.partitionId ? String(input.partitionId).trim() : undefined;
+  try {
+    const plan = planPartitionResume(store, partitionId);
+    return {
+      ok: plan.ok,
+      checkpoint: plan.checkpoint,
+      baseSeq: plan.baseSeq,
+      replayed: plan.replayed,
+      resume: plan.resume,
+      skipCompleted: plan.skipCompleted,
+      drift: plan.drift,
+      error: plan.error ?? null,
+    };
+  } catch (error) {
+    return { ok: false, error: "resume-plan-failed", message: (error as Error).message };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 公开入口：把「键名别名冲突」转成结构化错误（AlaisError 不冒泡到 N2）
 // ---------------------------------------------------------------------------
@@ -1089,5 +1362,55 @@ export function decide(input: DecideInput): Record<string, unknown> {
     const failure = aliasFailure(error);
     if (failure) return failure;
     throw error;
+  }
+}
+
+/**
+ * 质量报告（工具入口）。**只读**：只读 store，不写 journal、不改状态。
+ *
+ * 纯函数 qualityReport(store, opts) 在 core/quality.ts 里，便于单测；
+ * 这里只是包一层拿到 AsyncLocalStorage 里的 store。
+ */
+export function qualityStatus(options: { stage?: string | null; limit?: number } = {}): Record<string, unknown> {
+  const store = coreStore();
+  try {
+    // QualityReport 是结构化接口，工具层契约要求 Record<string, unknown> —— 显式断言，
+    // 而不是把返回类型放宽（放宽会让 core 与工具层的契约同时失去检查）。
+    return qualityReport(store, { stage: options?.stage ?? null, limit: options?.limit }) as unknown as Record<string, unknown>;
+  } catch (error) {
+    return { ok: false, error: String((error as Error)?.message ?? error) };
+  }
+}
+
+/**
+ * 协作图（工具入口）。**只读**：只读 store，不写 journal。
+ *
+ * 纯函数在 core/collaboration.ts，这里只负责拿 AsyncLocalStorage 里的 store。
+ */
+export function collaborationStatus(options: { minSample?: number } = {}): Record<string, unknown> {
+  const store = coreStore();
+  try {
+    return collaborationMap(store, { minSample: options?.minSample }) as unknown as Record<string, unknown>;
+  } catch (error) {
+    return { ok: false, error: String((error as Error)?.message ?? error) };
+  }
+}
+
+/**
+ * 邻域摘要（工具入口）。**只读**：只读 store，不写 journal、不读盘。
+ *
+ * 纯函数在 core/neighborhood.ts，这里只负责拿 AsyncLocalStorage 里的 store。
+ */
+export function neighborhoodStatus(options: { nodeId: string; direction?: string; maxNeighbors?: number; charsPerNeighbor?: number }): Record<string, unknown> {
+  const store = coreStore();
+  try {
+    if (!options?.nodeId) return { ok: false, error: 'nodeId-required' };
+    return neighborhoodOf(store, String(options.nodeId), {
+      direction: options.direction as never,
+      maxNeighbors: options.maxNeighbors,
+      charsPerNeighbor: options.charsPerNeighbor,
+    }) as unknown as Record<string, unknown>;
+  } catch (error) {
+    return { ok: false, error: String((error as Error)?.message ?? error) };
   }
 }

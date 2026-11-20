@@ -69,8 +69,23 @@ export function claimSucceeded(result, instanceId) {
 /**
  * §4 失败码 → 处置分支。
  * @param {string} code  core/repo/tool 层错误码
+ * @param {string} [gate]  core 抛出的闸门归因（capacity/partition/rate/budget）
  */
-export function decideAfterClaimFailure(code) {
+export function decideAfterClaimFailure(code, gate) {
+  // 限流类拒绝先按闸门分：三个容量码对应的**处置动作完全不同**，
+  // 混成「容量不足、等一会」会让 worker 在分区满员时干等全图额度。
+  switch (gate) {
+    case 'rate':
+      return { action: 'backoff', reason: '领取速率窗口已满，退避到下一窗口（自动恢复）' };
+    case 'partition':
+      return { action: 'switch-node', reason: '所属协调域满员，换本域外的节点（局部原因，调全图额度无用）' };
+    case 'capacity':
+      return { action: 'backoff', reason: '全图活跃租约触顶，等 worker 完成或租约释放' };
+    case 'budget':
+      return { action: 'escalate', reason: '预算耗尽，须人工加预算或缩范围，重试无用' };
+    default:
+      break;
+  }
   switch (code) {
     case 'LeaseHeld':
       return { action: 'switch-node', reason: '他人持有效 lease，换节点或退避（4 worker 下为常态）' };
@@ -85,6 +100,16 @@ export function decideAfterClaimFailure(code) {
     case 'projection-failed':
     case 'TEAM_NOT_MEMBER':
       return { action: 'ignore', reason: '团队板投影不可用，以 graph 为准，不阻断主流程' };
+    // 闸门码本身（上游漏传 gate 时兜底）：不能落进「未知码」，否则会被当成
+    // 保守退避——预算耗尽与全图触顶都是**重试无用**的，退避只会一直撞。
+    case 'graph_capacity':
+      return { action: 'backoff', reason: '全图活跃租约触顶（无 gate 归因，按容量处理）' };
+    case 'partition_capacity':
+      return { action: 'switch-node', reason: '协调域满员（无 gate 归因，换域外节点）' };
+    case 'rate_limited':
+      return { action: 'backoff', reason: '领取速率超限（无 gate 归因，退避到下一窗口）' };
+    case 'budget_exceeded':
+      return { action: 'escalate', reason: '预算耗尽（无 gate 归因，须人工介入）' };
     default:
       return { action: 'backoff', reason: `未知失败码 ${code}，保守退避` };
   }

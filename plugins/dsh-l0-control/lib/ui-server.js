@@ -13,8 +13,16 @@ import http from 'node:http';
                 
                                                          
                             
-                                                                                                            
-                                                                                                             
+     
+                                                                       
+                                                                                  
+     
+                
+                       
+                           
+                      
+                           
+                                  
                                                        
                                                    
                                                               
@@ -166,6 +174,7 @@ export function createUiHandler(
     let sessionId                    ;
     let workspaceRoot                    ;
     let sinceSeq                    ;
+    let withRecovery                     ;
     try {
       const query = new URLSearchParams(rawUrl.split('?')[1] ?? '');
       const value = query.get('sessionId');
@@ -174,10 +183,14 @@ export function createUiHandler(
       if (ws && String(ws).trim()) workspaceRoot = String(ws).trim();
       const since = query.get('sinceSeq');
       if (since && Number.isFinite(Number(since))) sinceSeq = Math.max(0, Math.floor(Number(since)));
+      // 恢复面按需：折叠 journal + 重放检查点，千级规模下不该每次快照都跑。
+      const withRec = query.get('withRecovery');
+      if (withRec === '1' || withRec === 'true') withRecovery = true;
     } catch {
       sessionId = undefined;
       workspaceRoot = undefined;
       sinceSeq = undefined;
+      withRecovery = undefined;
     }
     const rawOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
     const origin = allowedOrigin(req, options.allowedOrigins);
@@ -443,7 +456,7 @@ export function createUiHandler(
       return;
     }
     try {
-      const snapshot = await options.getSnapshot(sessionId, workspaceRoot, sinceSeq);
+      const snapshot = await options.getSnapshot(sessionId, workspaceRoot, sinceSeq, withRecovery);
       send(res, 200, snapshot);
     } catch (error) {
       send(res, 500, { ok: false, error: 'snapshot-failed', message: String((error         )?.message ?? error) });

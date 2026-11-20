@@ -262,6 +262,79 @@ window.__ModuleLoader__.load({
       managementAutoHint: '自动：由 AI 决定是否创建管理区。',
       footer: '数据每 10 秒刷新；实时图状态仍以 graph_status 为准。',
       plugins: '插件管理',
+      tabDispatch: '调度',
+      dispatchTitle: '派发与恢复',
+      dispatchHint: '「在跑」= 登记仍认为有活 worker（不是「派过」）；「已释放」= 上轮为什么允许重派。数据来自插件 journal。',
+      dispatchActive: '在跑',
+      dispatchClaimed: '已领取',
+      dispatchUnclaimed: '未领取',
+      dispatchReleased: '已释放',
+      dispatchIgnored: '忽略行',
+      dispatchRate: '速率额度',
+      dispatchRateUsed: '本秒已用',
+      dispatchRateLimit: '上限',
+      dispatchRateUnlimited: '不限',
+      dispatchQueue: '排队额度',
+      dispatchQueueHint: '「已派未领取」= 派出去了但还没 claim 到的 worker。它到达 claim 层只是时间问题，所以必须在派发前就限住；挡的是派发，放开靠 claim 与释放。',
+      dispatchGates: '上轮被谁挡',
+      dispatchGatesEmpty: '上一轮没有被挡下的节点。',
+      dispatchGatesHint: '四道闸门的处置方式不同：tick 等下一轮、capacity 等 worker 完成、rate 等下一窗口、queue 等 claim 或释放；partition 是某个协调域满员（只看该域），guard/budget/replay 需要人工介入。host-backoff 是宿主自己报了重试窗口——调本插件任何上限都无效，只能等到点。',
+      hostBackoffTitle: '宿主退避',
+      hostBackoffActive: '退避中',
+      hostBackoffExpired: '已到期',
+      hostBackoffHint: '宿主满载时会自己报一个「N 秒后再试」。窗口内派出去也只会被拒，所以一个都不派——旧行为是每个 tick 硬撞一次，把日志刷满同样的错误。宿主原文与到期时刻在下面。',
+      dispatchGateHistory: '最近主要卡在哪',
+      dispatchGateHistoryHint: '与「上轮被谁挡」回答的不是同一个问题：那一份只看最近一轮，瞬时原因会让相邻两轮完全不同，随便挑一轮得出的结论随取样时刻漂移。这里把窗口内所有轮次的命中累加，得到与取样时刻无关的分布。',
+      dispatchGateHistoryEmpty: '窗口内没有派发轮次。',
+      dispatchGateUnknown: '无归因数据',
+      dispatchMode: '模式',
+      dispatchStale: '失联阈值',
+      dispatchActiveRows: '在跑的节点',
+      dispatchActiveEmpty: '当前没有在跑的 worker。',
+      dispatchReleasedRows: '释放记录',
+      dispatchReleasedEmpty: '没有释放记录。',
+      dispatchFailed: '确定性失败',
+      dispatchFailedRows: '停止派发的节点',
+      dispatchFailedEmpty: '没有确定性失败。',
+      dispatchFailedHint: '这里是「重试也不会变好」的失败（preset 不存在、提示词超长、角色非法）；改完配置或任务后手动派一次才会解除。宿主满载不在此列——那是临时的，下一轮会自动重试。',
+      dispatchTruncated: '（已截断）',
+      dispatchNoSession: '需要先启用/选定对话窗口才会刷新调度数据。',
+      recoveryTitle: '检查点与恢复',
+      recoveryHint: 'checkpoint = 从哪儿接；replayed = 要重放多少事件；driftDetected = 有节点状态退步（journal 被截断或改写）。',
+      recoveryCheckpoint: '最近检查点',
+      recoveryBaseSeq: 'baseSeq',
+      recoveryReplayed: '重放事件',
+      recoveryDrift: '状态退步',
+      recoveryResume: '待续做',
+      recoverySkip: '已完成跳过',
+      recoveryNone: '无',
+      recoveryDriftWarn: '检测到状态退步：journal 可能被截断/改写，需人工比对 snapshot 或从备份恢复。',
+      // ── 以下键原先只在 locale/*.json 里，而 `t()` 只查这两张内联表 ⇒ 面板直接把
+      //    key 名当文案显示（例如黑板摘要显示 "bbTotal 13984"）。补齐并靠测试钉住。
+      sessions: '对话窗口',
+      needSession: '需要先选定对话窗口（sessionId）',
+      noSessions: '当前工作区没有对话窗口',
+      noSessionSnapshot: '该对话未接入/未快照（未调用过 team_status）',
+      bbTotal: '总事件',
+      bbShown: '已显示',
+      bbOlder: '更早',
+      bbFailed: '最近失败',
+      newProject: '新建项目',
+      projectNamePlaceholder: '项目名（例如 My App）',
+      wishPlaceholder: '一句话愿望（可选）',
+      preview: '预览',
+      create: '创建',
+      targetWorkspace: '目标工作区：',
+      previewOnly: '预览（dry-run，未写盘）',
+      created: '已创建',
+      actions: '动作',
+      conflicts: '冲突',
+      updateAvailable: '发现新版本',
+      currentVersion: '当前',
+      latestVersion: '最新',
+      upToDate: '已是最新版本',
+      laterUpdate: '稍后更新',
+      updateApplyLater: '本版本暂不自动更新；仓库发布后再接入一键更新。',
     };
 
     const EN = {
@@ -360,6 +433,77 @@ window.__ModuleLoader__.load({
       managementAutoHint: 'Auto: the AI decides whether to create a management area.',
       footer: 'Refreshes every 10s; graph_status remains the live source.',
       plugins: 'Plugins',
+      tabDispatch: 'Dispatch',
+      dispatchTitle: 'Dispatch and recovery',
+      dispatchHint: '"Active" means the registry can still prove a worker is alive (not "was dispatched"); "Released" explains why a re-dispatch was allowed. Data comes from the plugin journal.',
+      dispatchActive: 'Active',
+      dispatchClaimed: 'Claimed',
+      dispatchUnclaimed: 'Unclaimed',
+      dispatchReleased: 'Released',
+      dispatchIgnored: 'Ignored rows',
+      dispatchRate: 'Rate budget',
+      dispatchRateUsed: 'Used this second',
+      dispatchRateLimit: 'Limit',
+      dispatchRateUnlimited: 'unlimited',
+      dispatchQueue: 'Queue budget',
+      dispatchQueueHint: '"Dispatched but unclaimed" = workers already spawned that have not claimed yet. They will reach the claim layer eventually, so the limit must apply before dispatch; claims and releases free it up.',
+      dispatchGates: 'Last tick blocked by',
+      dispatchGatesEmpty: 'Nothing was blocked in the last tick.',
+      dispatchGatesHint: 'Each gate recovers differently: tick waits for the next round, capacity waits for workers to finish, rate waits for the next window, queue waits for claims or releases; partition means one coordination domain is full (that domain only), while guard/budget/replay need a human. host-backoff means the host itself asked for a retry window — no limit in this plugin can help, only waiting.',
+      hostBackoffTitle: 'Host backoff',
+      hostBackoffActive: 'backing off',
+      hostBackoffExpired: 'expired',
+      hostBackoffHint: 'When the host is saturated it reports its own "retry in N seconds". Dispatching inside that window only gets rejected, so nothing is dispatched at all — the old behaviour hammered the host once per tick and filled the log with identical errors. The host message and expiry time are below.',
+      dispatchGateHistory: 'Main blocker recently',
+      dispatchGateHistoryHint: 'This answers a different question than "last tick blocked by": that one only looks at the most recent round, and transient causes make adjacent rounds differ completely, so any single round gives an answer that drifts with sampling time. This sums hits across every round in the window, giving a distribution independent of when you look.',
+      dispatchGateHistoryEmpty: 'No dispatch rounds in the window.',
+      dispatchGateUnknown: 'no attribution data',
+      dispatchMode: 'Mode',
+      dispatchStale: 'Stale threshold',
+      dispatchActiveRows: 'Active nodes',
+      dispatchActiveEmpty: 'No worker is running right now.',
+      dispatchReleasedRows: 'Release records',
+      dispatchReleasedEmpty: 'No release records.',
+      dispatchFailed: 'Permanent failures',
+      dispatchFailedRows: 'Nodes stopped from dispatch',
+      dispatchFailedEmpty: 'No permanent failures.',
+      dispatchFailedHint: 'These will never succeed on retry (missing preset, oversized prompt, invalid role). Fix the config or task, then dispatch manually once to clear. Host saturation is not listed here — it is temporary and retries automatically.',
+      dispatchTruncated: '(truncated)',
+      dispatchNoSession: 'Select or enable a conversation window to see dispatch data.',
+      recoveryTitle: 'Checkpoint and recovery',
+      recoveryHint: 'checkpoint = where to resume; replayed = events to replay; driftDetected = a node regressed (journal truncated or rewritten).',
+      recoveryCheckpoint: 'Latest checkpoint',
+      recoveryBaseSeq: 'baseSeq',
+      recoveryReplayed: 'Replayed events',
+      recoveryDrift: 'Drift',
+      recoveryResume: 'To resume',
+      recoverySkip: 'Completed skipped',
+      recoveryNone: 'none',
+      recoveryDriftWarn: 'Drift detected: the journal may have been truncated or rewritten. Compare against the snapshot or restore from backup.',
+      sessions: 'Conversations',
+      needSession: 'Select a conversation window (sessionId) first',
+      noSessions: 'No conversation windows in this workspace',
+      noSessionSnapshot: 'This conversation is not connected or has no snapshot (team_status has not been called)',
+      bbTotal: 'Total events',
+      bbShown: 'Shown',
+      bbOlder: 'Older',
+      bbFailed: 'Recent failures',
+      newProject: 'New project',
+      projectNamePlaceholder: 'Project name (e.g. My App)',
+      wishPlaceholder: 'One-line wish (optional)',
+      preview: 'Preview',
+      create: 'Create',
+      targetWorkspace: 'Target workspace:',
+      previewOnly: 'Preview (dry-run, nothing written)',
+      created: 'Created',
+      actions: 'Actions',
+      conflicts: 'Conflicts',
+      updateAvailable: 'Update available',
+      currentVersion: 'Current',
+      latestVersion: 'Latest',
+      upToDate: 'Already up to date',
+      laterUpdate: 'Later',
+      updateApplyLater: 'Auto-update is not wired for this version; one-click update lands after the repository is published.',
     };
 
     const page = {
@@ -501,6 +645,10 @@ window.__ModuleLoader__.load({
       );
       const liveSessionId = ownSessionId || session?.id || null;
       const [tab, setTab] = React.useState('agents');
+      // tabRef：`load()` 是 useCallback（依赖里没有 tab，否则每切一次页就重建定时器），
+      // 但它需要知道「当前在哪一页」来决定要不要带 withRecovery。用 ref 读最新值。
+      const tabRef = React.useRef('agents');
+      React.useEffect(() => { tabRef.current = tab; }, [tab]);
       const [sidebarId, setSidebarId] = React.useState(null);
       const [projectId, setProjectId] = React.useState('code');
       const [pickedSession, setPickedSession] = React.useState(null);
@@ -643,6 +791,9 @@ window.__ModuleLoader__.load({
           if (target) params.set('sessionId', target);
           if (boardWorkspacePath) params.set('workspaceRoot', boardWorkspacePath);
           if (cursorRef.current !== null) params.set('sinceSeq', String(cursorRef.current));
+          // 恢复面按需拉：它要折叠 journal + 重放检查点，千级规模下每次快照都算一遍是纯浪费。
+          // 只有停在「调度」页时才带上。
+          if (tabRef.current === 'dispatch') params.set('withRecovery', '1');
           const qs = params.toString();
           const json = await getJson(qs ? `/ui/snapshot?${qs}` : '/ui/snapshot');
           if (!json || json.ok !== true) throw new Error(json?.error || 'snapshot failed');
@@ -685,6 +836,15 @@ window.__ModuleLoader__.load({
         return () => clearInterval(timer);
       }, [load]);
 
+      // 切到「调度」页时立刻再拉一次（否则要等最多 10 秒才带上 withRecovery）。
+      const prevTabRef = React.useRef(tab);
+      React.useEffect(() => {
+        if (prevTabRef.current !== tab) {
+          prevTabRef.current = tab;
+          if (tab === 'dispatch') load();
+        }
+      }, [tab, load]);
+
       const team = data?.team && data.team.ok ? data.team : null;
       const roster = data?.agents && data.agents.ok ? data.agents : null;
       const rosterItems = Array.isArray(roster?.items) ? roster.items : [];
@@ -714,6 +874,7 @@ window.__ModuleLoader__.load({
         ['team', t('tabTeam')],
         ['tasks', t('tabTasks')],
         ['board', t('tabBoard')],
+        ['dispatch', t('tabDispatch')],
         ['workspace', t('tabProject')],
       ];
 
@@ -891,6 +1052,173 @@ window.__ModuleLoader__.load({
               h('div', { style: mono }, fmt(event.kind)),
               h('div', { style: { ...mono, ...muted } }, fmt(event.at)),
               h('div', { style: muted }, fmt(event.text || event.nodeId || event.actor))))) : null,
+
+        tab === 'dispatch' ? (() => {
+          const dispatch = data?.dispatch && data.dispatch.ok ? data.dispatch : null;
+          const recovery = data?.recovery && data.recovery.ok !== false ? data.recovery : null;
+          const activeRows = Array.isArray(dispatch?.active?.rows) ? dispatch.active.rows : [];
+          const releasedRows = Array.isArray(dispatch?.released?.rows) ? dispatch.released.rows : [];
+          const failedRows = Array.isArray(dispatch?.failed?.rows) ? dispatch.failed.rows : [];
+          const rate = dispatch?.rate || {};
+          const statCell = (label, value, key) => h('div', { key: key || label, style: stat },
+            h('div', { style: { ...muted, fontSize: 12 } }, label),
+            h('div', { style: statValue }, fmt(value)));
+          return h('div', { style: card },
+            h('h2', { style: sectionTitle }, t('dispatchTitle')),
+            h('div', { style: muted }, t('dispatchHint')),
+            coordinationEnabled ? null : h('div', { style: { ...muted, marginTop: 4 } }, t('accessOff')),
+            !dispatch
+              ? h(Empty, { text: data?.dispatch?.message || t('dispatchNoSession') })
+              : h('div', null,
+                // 六个数字回答"现在到底什么状态"
+                h('div', { style: statGrid },
+                  statCell(t('dispatchActive'), dispatch.active?.count ?? 0, 'a'),
+                  statCell(t('dispatchClaimed'), dispatch.active?.claimed ?? 0, 'c'),
+                  statCell(t('dispatchUnclaimed'), dispatch.active?.unclaimed ?? 0, 'u'),
+                  statCell(t('dispatchReleased'), dispatch.released?.count ?? 0, 'r'),
+                  statCell(t('dispatchFailed'), dispatch.failed?.count ?? 0, 'f'),
+                  statCell(t('dispatchRate'),
+                    `${rate.usedLastSecond ?? 0} / ${rate.perSecond ? rate.perSecond : t('dispatchRateUnlimited')}`, 'rate'),
+                  statCell(t('dispatchQueue'),
+                    `${dispatch.queue?.queued ?? 0} / ${dispatch.queue?.maxQueued ? dispatch.queue.maxQueued : t('dispatchRateUnlimited')}`, 'queue'),
+                  statCell(t('dispatchIgnored'), dispatch.ignored ?? 0, 'i')),
+                h('div', { style: { ...muted, ...mono, marginTop: 8 } },
+                  `${t('dispatchMode')} ${fmt(dispatch.mode)} · ${t('dispatchStale')} ${dispatch.staleMs ? `${Math.round(Number(dispatch.staleMs) / 1000)}s` : '—'}`
+                  + ` · maxPerTick ${fmt(dispatch.maxPerTick)} · maxParallel ${fmt(dispatch.maxParallel)}`
+                  + (rate.saturated ? ' · 额度已用尽' : '')
+                  + (dispatch.queue?.saturated ? ' · 排队已满' : '')),
+                h('div', { style: { ...muted, marginTop: 4 } }, t('dispatchQueueHint')),
+
+                // 「宿主退避」：回答「我们不缺额度，是宿主不收」。
+                // 与下面两块（上轮被谁挡 / 最近主要卡在哪）不是同一个问题：
+                // 那两块是我们自己的闸门，这块是**宿主**的状态。不单独摆出来，
+                // 「ready 20、派 0」会被读成「配置太小」，然后去调一个无效的参数。
+                (() => {
+                  const backoff = dispatch.hostBackoff;
+                  if (!backoff) return null;
+                  return h('div', { style: { marginTop: 12 } },
+                    h('h3', { style: { ...sectionTitle, fontSize: 13 } },
+                      `${t('hostBackoffTitle')} · ${backoff.active ? t('hostBackoffActive') : t('hostBackoffExpired')}`),
+                    h('div', { style: { ...muted, marginBottom: 6 } }, t('hostBackoffHint')),
+                    h('div', { style: { ...muted, ...mono } },
+                      `${fmt(backoff.since)} → ${fmt(backoff.until)}`
+                      + ` · 宿主报 ${Math.round(Number(backoff.retryAfterMs) / 1000)}s`
+                      + (backoff.nodeId ? ` · ${fmt(backoff.nodeId)}` : '')
+                      + (backoff.active ? ` · 还剩 ${Math.ceil(Number(backoff.remainingMs) / 1000)}s` : '')),
+                    h('div', { style: { ...muted, marginTop: 4 } }, backoff.explain || ''));
+                })(),
+
+                // 「上一轮被谁挡」：回答「为什么现在没派」的唯一可信来源。
+                // 读的是 dispatchView.lastTick（折叠 journal 得出的真实那一轮），
+                // 不是面板自己重算——重算会与日志、与 worker 实际收到的指示不一致。
+                h('h3', { style: { ...sectionTitle, fontSize: 13, marginTop: 16 } }, t('dispatchGates')),
+                (() => {
+                  const last = dispatch.lastTick;
+                  if (!last) return h('div', { style: muted }, t('dispatchGatesEmpty'));
+                  const gates = Object.entries(last.gates || {});
+                  return h('div', null,
+                    h('div', { style: { ...muted, ...mono, marginBottom: 6 } },
+                      `${fmt(last.at)} · mode ${fmt(last.mode)} · ready ${fmt(last.ready)} · 派 ${fmt(last.willDispatch)} · spawn ${fmt(last.spawned)} · 巡检拦 ${fmt(last.blocked)}`
+                      + (last.error ? ` · ${fmt(last.error)}` : '')),
+                    h('div', { style: { ...muted, marginBottom: 6 } }, t('dispatchGatesHint')),
+                    gates.length === 0
+                      ? h('div', { style: muted }, t('dispatchGatesEmpty'))
+                      : h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                        gates.map(([gate, count]) => h('span', {
+                          key: gate,
+                          style: { ...pill, fontFamily: 'var(--dsw-font-mono, monospace)' },
+                        }, `${gate} × ${count}`))));
+                })(),
+
+                // 「最近主要卡在哪」：与上面那份回答的不是同一个问题。
+                // 上一份只看最近一轮；瞬时原因让相邻两轮完全不同，单轮结论随取样漂移。
+                // 这里读 gateHistory（窗口内所有轮次累计），才是排障时真正要的答案。
+                h('h3', { style: { ...sectionTitle, fontSize: 13, marginTop: 16 } }, t('dispatchGateHistory')),
+                (() => {
+                  const history = dispatch.gateHistory;
+                  if (!history || history.error) {
+                    return h('div', { style: muted }, history?.message ? fmt(history.message) : t('dispatchGateHistoryEmpty'));
+                  }
+                  const counts = Object.entries(history.counts || {}).sort((a, b) => b[1] - a[1]);
+                  return h('div', null,
+                    h('div', { style: { ...muted, marginBottom: 6 } }, t('dispatchGateHistoryHint')),
+                    h('div', { style: { ...muted, ...mono, marginBottom: 6 } },
+                      `窗口 ${Math.round((history.windowMs || 0) / 1000)}s · 轮次 ${fmt(history.ticks)}`
+                      + ` · 没挡 ${fmt(history.cleanTicks)}`
+                      + (history.unknownTicks > 0 ? ` · ${t('dispatchGateUnknown')} ${fmt(history.unknownTicks)}` : '')
+                      + (history.since ? ` · ${fmt(history.since)} → ${fmt(history.until)}` : '')),
+                    h('div', { style: { ...muted, marginBottom: 6 } }, history.explain),
+                    counts.length === 0
+                      ? h('div', { style: muted }, t('dispatchGateHistoryEmpty'))
+                      : h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 6 } },
+                        counts.map(([gate, count]) => h('span', {
+                          key: gate,
+                          style: { ...pill, fontFamily: 'var(--dsw-font-mono, monospace)' },
+                        }, `${gate} × ${count}`))));
+                })(),
+
+                // 在跑的节点：nodeId / 实例 / 会话 / 是否已领取 / 最后活动
+                h('h3', { style: { ...sectionTitle, fontSize: 13, marginTop: 16 } },
+                  `${t('dispatchActiveRows')}${dispatch.active?.truncated ? ` ${t('dispatchTruncated')}` : ''}`),
+                activeRows.length === 0
+                  ? h('div', { style: muted }, t('dispatchActiveEmpty'))
+                  : activeRows.map((item) => h('div', {
+                    key: item.nodeId,
+                    style: { ...row, gridTemplateColumns: 'minmax(110px, .9fr) minmax(130px, 1fr) minmax(90px, .7fr) minmax(80px, .6fr)' },
+                  },
+                    h('div', { style: mono }, fmt(item.nodeId)),
+                    h('div', { style: { ...mono, ...muted, fontSize: 11 } }, fmt(item.instanceId)),
+                    h('div', { style: { ...mono, ...muted, fontSize: 11 } }, fmt(String(item.sessionId || '').slice(0, 12))),
+                    h('div', null, h('span', { style: pill }, item.claimed ? t('dispatchClaimed') : t('dispatchUnclaimed'))))),
+
+                // 释放记录：「上一轮为什么允许重派」的答案
+                h('h3', { style: { ...sectionTitle, fontSize: 13, marginTop: 16 } }, t('dispatchReleasedRows')),
+                releasedRows.length === 0
+                  ? h('div', { style: muted }, t('dispatchReleasedEmpty'))
+                  : releasedRows.map((item, index) => h('div', {
+                    key: `${item.nodeId}-${index}`,
+                    style: { ...row, gridTemplateColumns: 'minmax(110px, .9fr) minmax(110px, .8fr) minmax(180px, 1.6fr)' },
+                  },
+                    h('div', { style: mono }, fmt(item.nodeId)),
+                    // 释放原因 + 闸门：「claim-rejected」本身不说明该做什么，
+                    // 补上 gate 才能区分「等一等」与「永远好不了」。
+                    h('div', null,
+                      h('span', { style: pill }, fmt(item.reason)),
+                      item.gate ? h('span', { style: { ...pill, marginLeft: 4 } }, fmt(item.gate)) : null),
+                    h('div', { style: muted }, fmt(item.explain)))),
+
+                // 确定性失败：「别再派了」的答案。与下面的释放记录语义相反，
+                // 所以分两块放，不合并成一张表。
+                h('h3', { style: { ...sectionTitle, fontSize: 13, marginTop: 16 } },
+                  `${t('dispatchFailedRows')}${(dispatch.failed?.count ?? 0) > failedRows.length ? t('dispatchTruncated') : ''}`),
+                h('div', { style: { ...muted, marginBottom: 6 } }, t('dispatchFailedHint')),
+                failedRows.length === 0
+                  ? h('div', { style: muted }, t('dispatchFailedEmpty'))
+                  : failedRows.map((item, index) => h('div', {
+                    key: `${item.nodeId}-${index}`,
+                    style: { ...row, gridTemplateColumns: 'minmax(110px, .9fr) minmax(120px, .8fr) minmax(180px, 1.6fr)' },
+                  },
+                    h('div', { style: mono }, fmt(item.nodeId)),
+                    h('div', null, h('span', { style: pill }, fmt(item.code))),
+                    h('div', { style: muted }, fmt(item.explain)))),
+
+                // 恢复面：崩了之后从哪儿接
+                h('h3', { style: { ...sectionTitle, fontSize: 13, marginTop: 16 } }, t('recoveryTitle')),
+                h('div', { style: { ...muted, marginBottom: 6 } }, t('recoveryHint')),
+                recovery?.driftDetected
+                  ? h('div', { style: { ...muted, color: 'var(--dsw-alias-state-warn-primary)', marginBottom: 6 } }, t('recoveryDriftWarn'))
+                  : null,
+                !recovery
+                  ? h('div', { style: muted }, t('recoveryNone'))
+                  : h('div', { style: { ...muted, ...mono } },
+                    `${t('recoveryBaseSeq')} ${fmt(recovery.baseSeq)} · ${t('recoveryReplayed')} ${fmt(recovery.replayed)}`
+                    + ` · ${t('recoveryResume')} ${(recovery.resume || []).length}`
+                    + ` · ${t('recoverySkip')} ${(recovery.skipCompleted || []).length}`
+                    + ` · ${t('recoveryDrift')} ${(recovery.drift || []).length}`),
+                recovery?.checkpoint
+                  ? h('div', { style: { ...muted, ...mono, marginTop: 4 } }, JSON.stringify(recovery.checkpoint).slice(0, 200))
+                  : null));
+        })() : null,
 
         tab === 'workspace' ? h('div', { style: card },
           h('h2', { style: sectionTitle }, t('projectTitle')),

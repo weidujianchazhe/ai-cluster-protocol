@@ -34,6 +34,10 @@ const SAME_ORIGIN_PREFIX = '/l0-control';
 
 const ACTION_BY_TOOL                         = {
   wish_submit: 'wish.create',
+  neighbor_digest: 'neighbor.read',
+  collaboration_map: 'collab.read',
+  quality_report: 'quality.read',
+  env_check: 'env.check',
   graph_status: 'graph.read',
   graph_export: 'export',
   task_next: 'task.next',
@@ -164,7 +168,33 @@ export function apply(ctx     , rawConfig          = {}) {
               hint: '在「AI集群工作协议」面板里启用本对话，或在对话输入框左侧点「启用 AI集群工作协议」',
             };
           }
-          const actor = actorOf(exec, args, tenant);
+          // 审计动作的 actor **只能**由「当前调用者是谁」决定。
+          //
+          // 真机事故：审计实例按契约省略 `auditor_instance`（服务会用自己的实例名），
+          // 于是 `pickInstanceFromArgs` 落到 args 里的 `producer_instance` → actor 被认成
+          // **生产者** → 判自审 → 403。**任何合法审计都必然失败**，且错误信息里
+          // 还能看到 `actor.id=<生产者>`，指向的是"自审"而非"身份认错"。
+          //
+          // 修法两层：
+          //   1. 优先用 `callerInstance` 把当前活 Agent 解析成**实例名**（日志可读，
+          //      职务也正确，例如 role-audit-code-47 → AUDIT_CODE）；
+          //   2. 解析不到时退回 `resolveActor`，但**排除 producer_instance**。
+          const auditAction = action === 'verify_done';
+          const boundInstance = auditAction ? instance.callerInstance?.(exec?.agent) : null;
+          const actor = auditAction && boundInstance && roleOfInstance(boundInstance)
+            ? { id: String(boundInstance), kind: 'agent'         , tenant, roles: [roleOfInstance(boundInstance)          ] }
+            : auditAction
+              ? resolveActor({ args, exec, tenant, roleOfInstance, excludeProducer: true })
+              : actorOf(exec, args, tenant);
+          // 兜底：任何一次已启用的工具调用都顺手确保一次「宿主 Team 上限已放开」。
+          // 幂等且 lazy——`restoreAccess()` 覆盖重载路径，这里覆盖「状态在别处被改过」
+          // 的边角；两处都不改任何业务语义，只保证放开不会因为加载顺序而漏掉。
+          instance.ensureTeamLimitOnce?.('tool-call');
+          // 协调器：记下 Lead 的 caller（自动派审计要用它），并确保常驻 tick 已启动。
+          // 放在工具入口是刻意的——定时器自己拿不到 `exec.agent`，而所有需要身份的
+          // 操作都发生在工具调用里。
+          try { instance.noteCaller?.(exec?.agent); } catch { /* 记不到不影响工具调用 */ }
+          try { instance.ensureCoordinatorStarted?.('tool-call'); } catch { /* 同上 */ }
           const { decision, row } = authorizeWithAudit(actor, action, {
             tenant,
             governance: action === 'verify_done' || action === 'decide' || action === 'reassign',
@@ -250,8 +280,8 @@ export function apply(ctx     , rawConfig          = {}) {
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean),
-    getSnapshot: (sessionId         , workspaceRoot         , sinceSeq         ) =>
-      pool.get(workspaceRoot ?? service.workspaceRoot).uiSnapshot({ sessionId, sinceSeq }),
+    getSnapshot: (sessionId         , workspaceRoot         , sinceSeq         , withRecovery          ) =>
+      pool.get(workspaceRoot ?? service.workspaceRoot).uiSnapshot({ sessionId, sinceSeq, withRecovery: withRecovery === true }),
     getWorkspaces: () => pool.list(),
     refreshTeam: async (input                                                ) => {
       const workspaceRoot = input?.workspaceRoot ?? service.workspaceRoot;

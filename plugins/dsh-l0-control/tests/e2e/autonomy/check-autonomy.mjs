@@ -24,6 +24,26 @@ const auditFile = process.argv[2] ?? path.join(root, '.l0-control', 'journal.jso
 const coreFile = process.argv[3] ?? path.join(root, '.l0-control', 'core-state', 'journal.jsonl');
 
 const COORDINATOR_SESSION = '1210cf86-12cb-4117-99d3-d42784b7e0ce';
+/**
+ * 允许调用方覆盖节点清单与「协调者会话」这两个历史常量。
+ *
+ * 为什么必须可覆盖：本文件原先只能校验**那一次**历史自主演练（节点名与协调者
+ * sessionId 都写死）。于是它无法用于任何可复现的演练——新跑一遍的 sessionId
+ * 必然不同，7 项断言里至少 2 项会因为「对不上历史值」而红，而那种红与代码质量
+ * 无关。可复现演练（`run.mjs`）用真实的 node 清单与一个判死的协调者 id 调它，
+ * 走的仍是**同一份**断言实现，不复制第二套判定。
+ *
+ * 缺省值保持原样：不带参数时的行为与改造前逐字节一致。
+ */
+const DEFAULT_NODES = ['NODE-RESEARCH', 'NODE-PRD', 'NODE-CONTRACT', 'NODE-BUILD', 'NODE-AUDIT', 'NODE-DELIVER'];
+const NODES_ARG = (process.argv[4] ?? '').trim();
+// 支持 `@文件`：千节点规模时把清单写进临时文件，避开命令行长度限制（Windows 32767）。
+const NODES = NODES_ARG.startsWith('@')
+  ? String(fs.readFileSync(NODES_ARG.slice(1), 'utf8')).split(',').map((s) => s.trim()).filter(Boolean)
+  : NODES_ARG
+    ? NODES_ARG.split(',').map((s) => s.trim()).filter(Boolean)
+    : DEFAULT_NODES;
+const COORDINATOR = (process.argv[5] ?? '').trim() || COORDINATOR_SESSION;
 const AUDIT_ROLE_RE = /^role-audit/i;
 const WORKER_RE = /^role-/i;
 const lower = (value) => String(value ?? '').toLowerCase();
@@ -78,7 +98,7 @@ for (const row of coreRows) {
     if (stage) gates.set(stage, status ?? 'passed');
   }
 }
-const NODES = ['NODE-RESEARCH', 'NODE-PRD', 'NODE-CONTRACT', 'NODE-BUILD', 'NODE-AUDIT', 'NODE-DELIVER'];
+// 节点清单来自参数（默认是那次历史演练的六个节点），见文件头 DEFAULT_NODES 说明。
 
 // ── 审计 journal 切片：只看本轮自主窗口（最后一次 wish_submitted 之后） ──
 let startIndex = 0;
@@ -92,9 +112,11 @@ const evidences = window.filter((row) => row.kind === 'evidence_submitted');
 const verifies = window.filter((row) => row.kind === 'verify_done_requested');
 const rejects = window.filter((row) => row.kind === 'verify_done_rejected');
 
-check('done: 6/6 节点 done', () => {
+check(`done: ${NODES.length}/${NODES.length} 节点 done`, () => {
   const done = NODES.filter((node) => nodeStatus.get(node) === 'done');
-  return { ok: done.length === 6, detail: NODES.map((node) => ({ node, status: nodeStatus.get(node) ?? 'unknown' })) };
+  // 断言用 NODES.length 而不是写死的 6：这条曾经把「6」同时写进标题和判据，
+  // 于是换个规模跑就变成「永远是 6/6 才算过」——判据被规模绑架，而标题看着没问题。
+  return { ok: done.length === NODES.length, detail: NODES.map((node) => ({ node, status: nodeStatus.get(node) ?? 'unknown' })) };
 });
 
 check('claim: 全部节点由 worker 领取；≥2 CODE + ≥2 AUDIT **参与**（claim 或 verify，G-2 口径 ③）', () => {
@@ -152,7 +174,7 @@ check('租约: 每个 claim 都有 lease/token 证据（插件行或 core lease_
 check('无插件代发: 审计行里没有协调者会话直接发起的 claim/evidence/verify', () => {
   const rows = [...claims, ...evidences, ...verifies].filter((row) => {
     const actor = String(row.callerSessionId ?? row.instanceId ?? row.producer_instance ?? '');
-    return actor === COORDINATOR_SESSION;
+    return actor === COORDINATOR;
   });
   const actors = [...new Set([...claims, ...evidences, ...verifies].map((row) => String(row.instanceId ?? row.producer_instance ?? row.auditor_instance ?? '')))];
   return { ok: rows.length === 0 && actors.every((id) => id === '' || WORKER_RE.test(id)), detail: { offenders: rows, actors } };

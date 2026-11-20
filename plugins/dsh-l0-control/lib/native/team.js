@@ -43,7 +43,7 @@
                                                     
                     
                                                          
-                              
+                                                                                                     
  
 
                                    
@@ -63,9 +63,37 @@
                    
                                                    
                           
+     
+                                                           
+    
+                                                    
+                                                      
+                                                    
+                                     
+     
+                              
+     
+                                                   
+                                                    
+    
+                                           
+                                                        
+     
+                      
+                                                                   
+                                                                     
+     
+                                      
+    
+                                                 
+                                                      
+                                            
+     
+                               
  
 
 import { buildWorkerPrompt, profileFor } from './worker.js';
+import { classifySpawnFailure } from './spawn-failure.js';
 
                                        
                      
@@ -102,6 +130,26 @@ function liveSignal()              {
 function errorInfo(error         ) {
   const err = error                                                                  ;
   return { name: err?.name ?? 'Error', code: err?.code ?? null, message: String(err?.message || error) };
+}
+
+/**
+ * 宿主 Team 成员上限（`TEAM_MEMBER_LIMIT`）。
+ *
+ * **这是宿主的约束，不是本插件的**：`agentTeams` 服务的 11 个方法（membership /
+ * listMembers / spawnTeammate / sendMessage / createTask / getTask / listTasks /
+ * updateTask / waitForChange / interrupt / tryMembership）里**没有任何设置上限的接口**，
+ * 实机自省确认。所以「把 16 调大」在宿主侧做不到。
+ *
+ * 本插件因此把它**降级成一条预期路径**而不是失败：Team 满了就走 activation（B），
+ * 并且**不把它当能力缺失**——因为 L0 的任务板（graph）才是权威，Team board 只是投影
+ * （`teamTaskRole: 'projection'`），而 activation worker 走的 `task_claim` 完全不经过 Team。
+ *
+ * 唯一真实损失：activation 实例没有 memberName，因此**不能当原生 TeamTask 的 owner**。
+ * 这条写进 README，不藏。
+ */
+export function isTeamMemberLimit(error         )          {
+  const info = errorInfo(error);
+  return info.code === 'TEAM_MEMBER_LIMIT' || /TEAM_MEMBER_LIMIT|member limit/i.test(info.message);
 }
 
                                     
@@ -172,6 +220,36 @@ export class NativeTeam {
   /** Team member 名 = 实例 ID（统一身份）：`role-<role>-<nn>`。 */
   static memberName(role        , index        )         {
     return roleInstanceId(role, index);
+  }
+
+  /**
+   * 找一个**宿主 Team 里确实没被占用**的成员名下标。
+   *
+   * 为什么需要：`nextIndex()` 只看本进程内存在 `this.instances` 里的记录。插件一重载，
+   * 那份 map 就空了，index 从 1 重新开始 —— 但宿主的 Team 成员还在，于是
+   * `spawnTeammate` 抛 `TEAM_MEMBER_NAME_TAKEN`（本轮真实撞到：`role-code-68` 已被用过）。
+   * 后果不是报错就完了：它会静默退回 activation（`ownerCapable:false`），
+   * 让审计实例失去 TeamTask owner 能力——一个不报错的能力降级。
+   *
+   * 所以判据要取**宿主侧的权威名单**（`listMembers`），不是本地 counter。
+   * 查不到名单时按原样返回，让宿主自己报错（不假装能避让）。
+   */
+          freeMemberIndex(caller              , role        , start        )         {
+    const teams = this.agentTeams;
+    if (!teams || typeof teams.listMembers !== 'function') return start;
+    let used             ;
+    try {
+      const rows = (teams.listMembers(caller) ?? [])                            ;
+      used = new Set(rows.map((row) => String(row?.name ?? '')).filter(Boolean));
+    } catch {
+      return start; // 拿不到权威名单 → 不猜
+    }
+    let index = start;
+    for (let i = 0; i < 10_000; i += 1) {
+      if (!used.has(roleInstanceId(role, index))) return index;
+      index += 1;
+    }
+    return start;
   }
 
   /** 尝试走 Team member 路径：caller 必须是 Lead 且 `spawnTeammate` 可用。 */
@@ -264,14 +342,23 @@ export class NativeTeam {
     } catch (error) {
       return { ok: false, error: 'unknown-role', role, hint: String((error         )?.message ?? error) };
     }
-    const index = Number(input.index ?? this.nextIndex(role));
+    let index = Number(input.index ?? this.nextIndex(role));
+    const via = input.via ?? 'auto';
+    // 走 Team 路径前先把下标挪到「宿主名单里没被占用」的位置。
+    // 重载后本地 instances 为空、而宿主成员还在，直接用 nextIndex 会撞
+    // `TEAM_MEMBER_NAME_TAKEN` 并静默退回 activation（丢掉 ownerCapable）。
+    // 显式传 `index` 时也检查——那是「我要这个特定下标」的意图，撞了就如实报错更好，
+    // 所以只有非显式时才避让。
+    if (input.index === undefined && (via === 'auto' || via === 'team') && this.leadCanSpawnTeammate(caller)) {
+      index = this.freeMemberIndex(caller, role, index);
+    }
     const instanceId = roleInstanceId(role, index);
     if (this.instances.has(instanceId)) {
       return { ok: false, error: 'instance-exists', instanceId, hint: '同职务换 index，或先 send_message 续跑' };
     }
 
     // 路径 1：Team member（A；只有 Lead 能 spawnTeammate；via=activation/provider 时跳过）
-    const via = input.via ?? 'auto';
+    // `via` 已在上方解析（避让逻辑要用它），这里不再重复声明。
     // P2-11：provider C 未注册自定义 provider 时显式报错，禁止静默走默认 spawn
     if (via === 'provider') {
       const gate = this.providerGate(input);
@@ -315,9 +402,23 @@ export class NativeTeam {
           workerPrompt: this.workerSummary(input, role, instanceId),
         };
       } catch (error) {
-        // 失败不硬失败：落到 startActivation 再试一次，并把原因带回
+        // 失败不硬失败：落到 startActivation 再试一次，并把原因带回。
+        //
+        // 其中 `TEAM_MEMBER_LIMIT`（宿主 Team 成员上限，实测 16）是**预期路径**而不是
+        // 能力缺失：宿主 `agentTeams` 没有设置上限的接口（11 个方法全查过），所以「调大」
+        // 在宿主侧做不到；能做的是**不依赖它**——activation 实例走的 `task_claim`
+        // 完全不经过 Team，L0 全链可用。唯一真实损失是它不能当原生 TeamTask owner
+        // （Team board 只是 L0 的投影，权威在 graph）。
+        //
+        // 因此这里把「是不是撞上限」显式标出来，让观测面能区分
+        // 「宿主满了正常降级」与「真的派不出去」——两者混在一起会让人去调错的参数。
         const fallback = await this.spawnViaActivation(input, caller, role, index, instanceId);
-        return { ...fallback, teammateError: errorInfo(error)          };
+        const limited = isTeamMemberLimit(error);
+        return {
+          ...fallback,
+          teammateError: errorInfo(error)         ,
+          ...(limited ? { teamLimitFallback: true          } : {}),
+        };
       }
     }
 
@@ -376,7 +477,17 @@ export class NativeTeam {
         workerPrompt: this.workerSummary(input, role, instanceId),
       };
     } catch (error) {
-      return { ok: false, error: 'spawn-failed', detail: errorInfo(error)         , role };
+      const failure = classifySpawnFailure(error);
+      return {
+        ok: false,
+        error: 'spawn-failed',
+        detail: errorInfo(error)         ,
+        role,
+        retryable: failure.retryable,
+        failureCode: failure.code,
+        retryAfterMs: failure.retryAfterMs,
+        hint: failure.message,
+      };
     }
   }
 
@@ -393,6 +504,7 @@ export class NativeTeam {
       auditPartner: worker.auditPartner,
       capability: worker.capability,
       contextPack: worker.contextPack,
+      taskBrief: worker.taskBrief,
       // 心跳 TTL 必须真传到 prompt：漏传会让派发方的 ttlSec 静默失效，worker 永远按默认值续租。
       heartbeatTtlSec: worker.heartbeatTtlSec,
     });

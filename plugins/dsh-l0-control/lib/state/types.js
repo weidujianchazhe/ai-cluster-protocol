@@ -214,6 +214,13 @@ export class StateError extends Error {
                                       
                                   
                                                       
+     
+                                                      
+    
+                                                
+                         
+     
+                                                  
  
 
                              
@@ -276,6 +283,18 @@ export class StateError extends Error {
                                         
                      
                      
+     
+                                       
+    
+                                                            
+                                                                  
+                                                                           
+                                          
+    
+                                                      
+                                                 
+     
+                           
  
 
                               

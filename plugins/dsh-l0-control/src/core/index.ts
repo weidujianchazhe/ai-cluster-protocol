@@ -72,11 +72,34 @@ export {
   claim,
   currentLease,
   expire,
+  extendForAudit,
   release,
   renew,
   takeover,
 } from "./leases.ts";
 export type { ClaimOptions, RenewOptions, TakeoverOptions } from "./leases.ts";
+
+// ── 质量度量与协作图（只读聚合，不参与任何判定）──
+export {
+  scoreNode,
+  qualityReport,
+  buildReworkIndex,
+  isSystemReworkReason,
+  SYSTEM_REWORK_REASONS,
+} from "./quality.ts";
+export type { ReworkBreakdown } from "./quality.ts";
+export { collaborationMap } from "./collaboration.ts";
+export { neighborhoodOf, partitionOf } from "./neighborhood.ts";
+export type { Neighborhood, NeighborDigest, NeighborhoodDirection, NeighborVia } from "./neighborhood.ts";
+export type { CollaborationEdge, CollaborationNode, CollaborationReport } from "./collaboration.ts";
+export type {
+  NodeQuality,
+  QualityReport,
+  QualityGroup,
+  QualityGrade,
+  QualityDimensions,
+  QualitySample,
+} from "./quality.ts";
 
 // ── N2 `service.ts` 约定的门面动作（R4 起全部落地，pending=[]）──
 export {
@@ -87,12 +110,20 @@ export {
   coreStore,
   decide,
   exportProjection,
+  graphCheckpoint,
   graphCommit,
   graphPlan,
+  graphRecover,
+  graphResumePlan,
   graphStatus,
+  dispatchPlan,
   heartbeatTask,
   nextTask,
   nodeGates,
+  collaborationStatus,
+  neighborhoodStatus,
+  qualityStatus,
+  reapExpiredLeases,
   rehydrateCore,
   resetCore,
   restoreCore,
@@ -100,6 +131,7 @@ export {
   submitWish,
   tickDecisions,
   verifyDone,
+  withCoreStore,
 } from "./facade.ts";
 export type {
   ClaimTaskInput,
@@ -110,6 +142,15 @@ export type {
   VerifyDoneInput,
   WishInput,
 } from "./facade.ts";
+
+// ── 预算与速率（从 journal 推导，不另存计数器）──────────────────────
+export { assertBudget, budgetBlockedNodes, budgetView, claimsInWindow, tokenUsage } from "./budget.ts";
+export type { BudgetBlock, BudgetView, UsageSnapshot } from "./budget.ts";
+export { leaseCapacity } from "./admission.ts";
+
+// ── 分区检查点与恢复 ──────────────────────────────────────────────
+export { checkpointPartition, planPartitionResume, readLastCheckpoint, recoverFromCheckpoint } from "./checkpoint.ts";
+export type { PartitionCheckpoint, RecoveryReport } from "./checkpoint.ts";
 
 // ── replan（单事务）────────────────────────────────────────────────────
 export {

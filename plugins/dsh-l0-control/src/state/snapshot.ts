@@ -26,22 +26,32 @@ export function journalBytesOf(records: JournalRecord[]): number {
   return records.reduce((sum, record) => sum + Buffer.byteLength(`${canonicalJson(record)}\n`, 'utf8'), 0);
 }
 
+/**
+ * 构建快照。
+ *
+ * `known` 让调用方把**已经算过的**摘要/字节数带进来，避免重复计算。
+ * 这不是微优化：`stateSha256` 要 `canonicalJson` 整个 state（10 万节点 34 MB ≈ 0.55 s），
+ * `journalHash` 要 sha256 整个 journal（100 MB ≈ 0.5 s），而恢复流程往往刚刚算过其中之一。
+ * 不传就照旧现算，语义完全不变。
+ */
 export function buildSnapshot(
   state: StateDoc,
   records: JournalRecord[],
   rawJournalText: string,
   at: string,
+  known: { stateSha256?: string; journalBytes?: number; journalHash?: string } = {},
 ): SnapshotFile {
   const meta: SnapshotMeta = {
     schema: STATE_SCHEMA,
     seq: state.revision,
     revision: state.revision,
     graphRevision: state.graphRevision,
-    journalBytes: Buffer.byteLength(rawJournalText, 'utf8'),
-    journalHash: sha256Hex(rawJournalText),
-    stateSha256: stateSha256(state),
+    journalBytes: known.journalBytes ?? Buffer.byteLength(rawJournalText, 'utf8'),
+    journalHash: known.journalHash ?? sha256Hex(rawJournalText),
+    stateSha256: known.stateSha256 ?? stateSha256(state),
     createdAt: at,
   };
+  void records; // 保留参数位（早期实现用它算 journalBytes；现在按原文算，口径更准）
   return { meta, state };
 }
 
@@ -67,8 +77,14 @@ export async function readSnapshot(fsPort: FsPort, paths: StatePaths): Promise<L
   return { file, version };
 }
 
-/** 快照自校验：`stateSha256` 与内容一致，且 meta.seq 与 state.revision 一致。 */
-export function verifySnapshot(file: SnapshotFile): void {
+/**
+ * 快照自校验：`stateSha256` 与内容一致，且 meta.seq 与 state.revision 一致。
+ *
+ * **返回**实际算出的 `stateSha256`：调用方（恢复流程）几乎总要用这个摘要去做下一步比对，
+ * 而算它要 `canonicalJson` 整个 state（10 万节点 34 MB，约 0.6 s）。让它返回而不是
+ * `void`，是为了让同一份 state 的摘要**每个进程内只算一次**，而不是各调用点各算一遍。
+ */
+export function verifySnapshot(file: SnapshotFile): string {
   if (file.meta.schema !== STATE_SCHEMA) {
     throw new StateError('STATE_CORRUPT', `快照 schema=${file.meta.schema} != ${STATE_SCHEMA}`);
   }
@@ -82,6 +98,7 @@ export function verifySnapshot(file: SnapshotFile): void {
   if (file.meta.seq !== file.state.revision) {
     throw new StateError('STATE_DIVERGED', `快照 meta.seq=${file.meta.seq} != state.revision=${file.state.revision}`);
   }
+  return actual;
 }
 
 export interface SnapshotWriteResult {
@@ -116,12 +133,18 @@ export async function updateSnapshot(
   );
 }
 
-/** 快照与 journal 的锚点比较。 */
+/**
+ * 快照与 journal 的锚点比较。
+ */
 export interface AnchorCheck {
   status: 'in-sync' | 'snapshot-ahead' | 'journal-ahead' | 'diverged';
   snapshotSeq: number;
   journalSeq: number;
   journalHashMatches: boolean;
+  /** 实际算出的前缀 sha256（= 当前 journal 前 `journalBytes` 字节的摘要），供调用方复用。 */
+  prefixHash: string;
+  /** 实际参与比较的字节数（被截到当前 journal 长度，故不会越界）。 */
+  anchoredBytes: number;
   detail: Record<string, string | number>;
 }
 
@@ -131,6 +154,8 @@ export interface AnchorCheck {
  *     所以用「当前文本前 journalBytes 字节」的 sha256 与 `journalHash` 比，
  *     而不是比全文（比全文会在 journal 正常前进时误报）。
  *   - 前缀字节落在行边界（构建时按整行累计），UTF-8 多字节切分安全。
+ *   - 返回值带上 `prefixHash` / `anchoredBytes`：恢复流程拿它判断"快照是否正好等于当前
+ *     journal 全文"，从而跳过第二次全量哈希——100 MB 的 sha256 约 0.78 s。
  */
 export function checkAnchor(file: SnapshotFile, records: JournalRecord[], rawJournalText: string): AnchorCheck {
   const journalSeq = records.length ? records[records.length - 1].seq : 0;
@@ -142,6 +167,8 @@ export function checkAnchor(file: SnapshotFile, records: JournalRecord[], rawJou
     snapshotSeq: file.meta.seq,
     journalSeq,
     journalHashMatches,
+    prefixHash,
+    anchoredBytes,
   };
   if (file.meta.seq > journalSeq) {
     return { status: 'snapshot-ahead', ...base, detail: { reason: '快照序号超过 journal：journal 丢失/被回滚' } };

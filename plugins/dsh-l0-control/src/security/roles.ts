@@ -71,6 +71,16 @@ export function validateRoleTables(): string[] {
 export const PERMISSIONS: Record<string, readonly Role[]> = {
   // 图 / 愿望
   "wish.create": ["ORCH", "HUMAN"],
+  // 环境体检（env_check）是**纯只读诊断**：能跑多大、数据落哪、缺什么。
+  // 任何角色都该能问——把它锁起来只会让人「不知道环境不够，派完才发现」。
+  // 质量度量是纯只读聚合：任何角色都该能查「这批活干得怎么样」。
+  // 它**不参与任何判定**（verify_done / pass_gate / 派发闸门都不看它），所以放开无风险。
+  // 协作图同样是纯只读聚合。
+  // 邻域摘要同样是纯只读。
+  "neighbor.read": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
+  "collab.read": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
+  "quality.read": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
+  "env.check": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
   "graph.read": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
   "memory.load": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "OBS", "PLUGIN", "HUMAN"],
   "memory.write": ["ORCH", "RESEARCH", "DESIGN", "CODE", "AUDIT", "DELIVER", "PLUGIN", "HUMAN"],

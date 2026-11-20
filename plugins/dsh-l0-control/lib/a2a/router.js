@@ -9,11 +9,11 @@
  *   GET  /a2a/tasks/:id                  （REST 查状态）
  *   POST /a2a/tasks/:id/cancel           （REST 取消）
  *
- * 错误码约定（全部 `{error:{code,message,details?}}`）：
- *   401 unauthorized · 403 tenant-mismatch · 404 not-found / task-not-found
- *   400 invalid-json / invalid-task-request / idempotency-key-required / invalid-idempotency-key
- *   405 method-not-allowed · 409 idempotency-conflict / task-not-cancelable
- *   413 payload-too-large · 500 internal · 502 port-failed · 503 port-unavailable
+ * 错误码约定（全部 `{error:{code,message,details?}}`，码值是协议的一部分，故保持原样）：
+ *   401 未通过鉴权 · 403 租户不匹配 · 404 路径或任务不存在
+ *   400 JSON 非法 / 任务请求非法 / 缺幂等键 / 幂等键非法
+ *   405 方法不允许 · 409 幂等键冲突 / 任务已无法取消
+ *   413 载荷过大 · 500 内部错误 · 502 端口启动失败 · 503 端口不可用
  */
 import { createHash } from 'node:crypto';
 import { authorize } from './auth.js';

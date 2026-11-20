@@ -57,11 +57,33 @@ export class Store {
   state: State;
   readonly journal: Journal;
   readonly clock: Clock;
+  /**
+   * 影响「就绪集合」的变更计数（单调递增）。
+   *
+   * 为什么需要它：`readySet()` 要遍历全图筛 ready 再排序，而 `task_next` 每次调用都会
+   * 用到它（worker 唯一问活的入口）。就绪集合只在**状态迁移 / 节点增删 / 依赖变更**时
+   * 才会变，可这三件事之外的调用占绝大多数。
+   *
+   * 为什么不用 `journal.count()` 当键：`Store.atomically()` 回滚会把日志截短，之后
+   * 重写可能让它回到同一个条数，而内容不同——那样的键会命中过期缓存。这个计数器
+   * 由**变更函数自己** bump，回滚不会把它退回，因此不会出现「同一键两种内容」。
+   */
+  private epochCounter = 0;
 
   constructor(options: { clock?: Clock; journal?: Journal; state?: State } = {}) {
     this.clock = options.clock ?? systemClock;
     this.journal = options.journal ?? new Journal(this.clock);
     this.state = options.state ?? emptyState();
+  }
+
+  /** 就绪集合相关状态的版本号（每次变更 +1，只增不减）。 */
+  get epoch(): number {
+    return this.epochCounter;
+  }
+
+  /** 由 `graph.ts` 的变更函数调用（状态迁移 / 节点增删 / 依赖变更）。 */
+  bumpEpoch(): void {
+    this.epochCounter += 1;
   }
 
   nowIso(): string {
@@ -77,18 +99,40 @@ export class Store {
     return { state: cloneState(this.state), events: this.journal.raw() };
   }
 
+  /** 状态 + 回滚点的**轻量**快照（回滚专用）。 */
+  captureForRollback(): { state: State; mark: { length: number } } {
+    return { state: cloneState(this.state), mark: this.journal.mark() };
+  }
+
   restore(snapshot: { state: State; events: EventRecord[] }): void {
     this.state = cloneState(snapshot.state);
     this.journal.restore(snapshot.events);
   }
 
-  /** 单事务区间：fn 抛错 → 状态与日志一起回滚后原样抛出。 */
+  restoreFromRollback(snapshot: { state: State; mark: { length: number } }): void {
+    this.state = cloneState(snapshot.state);
+    this.journal.rollbackTo(snapshot.mark);
+  }
+
+  /**
+   * 单事务区间：fn 抛错 → 状态与日志一起回滚后原样抛出。
+   *
+   * **为什么回滚点用 `journal.mark()` 而不是整份日志拷贝**：
+   * 日志只追加，回滚 = 截断到 mark 之前，语义完全等价；但成本从
+   * O(events) 的深拷贝降到 O(1)。16000 条事件时 `raw()` 约 11ms，
+   * 而 claim / verify / submit 每次都要进出 `atomically` —— 深拷贝版把
+   * 总成本从 O(n) 拉成 O(n²)，千节点吞吐 30 节点/秒。改 O(1) 回滚点后
+   * 同一机器同一图跑到 441 节点/秒（×14.7）。
+   *
+   * `state` 仍然整份 `structuredClone`：状态是可变表（Map + 对象），
+   * 没有天然的撤销日志，而它是 O(nodes) 而非 O(events)，且远小于日志。
+   */
   atomically<T>(fn: () => T): T {
-    const snapshot = this.capture();
+    const snapshot = this.captureForRollback();
     try {
       return fn();
     } catch (error) {
-      this.restore(snapshot);
+      this.restoreFromRollback(snapshot);
       throw error;
     }
   }

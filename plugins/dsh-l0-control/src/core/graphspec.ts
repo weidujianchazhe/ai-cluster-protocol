@@ -51,12 +51,40 @@ export interface CoordinationGroup {
   note?: string;
 }
 
+export interface CoordinationPartition {
+  id: string;
+  parentId?: string | null;
+  nodeRefs: string[];
+  writeScopes?: string[];
+  maxActive?: number;
+  budgetTokens?: number;
+  strategy?: string;
+}
+
+export interface DelegationPolicy {
+  enabled?: boolean;
+  maxFanout?: number;
+  maxDepth?: number;
+  requireIdempotencyKey?: boolean;
+}
+
+export interface AggregationPolicy {
+  completion?: 'all' | 'any' | 'quorum';
+  quorum?: number;
+  summarySchema?: string;
+}
+
 export interface CoordinationSpec {
   enabled?: boolean;
   strategy?: string;
   maxActive?: number;
   maxDepth?: number;
   groups?: CoordinationGroup[];
+  partitions?: CoordinationPartition[];
+  delegation?: DelegationPolicy;
+  aggregation?: Record<string, AggregationPolicy>;
+  maxQueuedTasks?: number;
+  ratePerSecond?: number;
 }
 
 export interface GraphSpec {
@@ -116,6 +144,11 @@ export function planGraph(specInput: GraphSpec): GraphPlan {
   }
   if (!String(spec.wish ?? '').trim()) {
     warnings.push('wish 为空：建议写明原始需求，便于以后追溯');
+  }
+
+  if (spec.policies?.maxParallel !== undefined &&
+      (!Number.isSafeInteger(Number(spec.policies.maxParallel)) || Number(spec.policies.maxParallel) < 1)) {
+    errors.push(issue('policy-max-parallel-invalid', 'policies.maxParallel 必须是正整数'));
   }
 
   const ids = new Set<string>();
@@ -258,8 +291,56 @@ export function planGraph(specInput: GraphSpec): GraphPlan {
     warnings.push('未提供 designBoundary：大规模工作图建议先写清 maxNodes/maxParallel/复杂度/理由，防止过度设计');
   }
 
-  // 协调边界：大规模并行时，先分组/分层，不靠“多开 Agent”本身解决问题。
+  // 分区与协调关系独立于执行依赖 DAG；parentId 只描述管理归属，不生成阻塞边。
   const coordination = spec.coordination;
+  if (coordination && !coordination.enabled && (coordination.partitions?.length || coordination.delegation?.enabled)) warnings.push('coordination 因子已提供但 enabled=false；分区校验与调度策略未启用');
+  if (coordination?.enabled) {
+    if (coordination.delegation?.enabled && !coordination.partitions?.length) warnings.push('动态委派已启用但当前无静态分区；运行时需提交 parentNodeId、revision 与幂等键，并受配置背压限制');
+    const partitions = Array.isArray(coordination.partitions) ? coordination.partitions : [];
+    const partitionById = new Map<string, CoordinationPartition>();
+    const partitionOwner = new Map<string, string>();
+    for (const partition of partitions) {
+      const id = String(partition?.id ?? '').trim();
+      if (!id) { errors.push(issue('partition-id-required', 'coordination.partitions[].id 必填')); continue; }
+      if (partitionById.has(id)) errors.push(issue('partition-id-duplicate', `重复分区 id：${id}`));
+      partitionById.set(id, partition);
+      if (partition.maxActive !== undefined && (!Number.isInteger(Number(partition.maxActive)) || Number(partition.maxActive) < 1))
+        errors.push(issue('partition-max-active-invalid', `分区 ${id} 的 maxActive 必须为正整数`));
+      if (partition.budgetTokens !== undefined && (!Number.isInteger(Number(partition.budgetTokens)) || Number(partition.budgetTokens) < 0))
+        errors.push(issue('partition-budget-invalid', `分区 ${id} 的 budgetTokens 必须为非负整数`));
+      for (const nodeId of partition.nodeRefs ?? []) {
+        if (!ids.has(nodeId)) errors.push(issue('partition-unknown-node', `分区 ${id} 引用了未知节点 ${nodeId}`));
+        const owner = partitionOwner.get(nodeId);
+        if (owner && owner !== id) errors.push(issue('partition-node-overlap', `节点 ${nodeId} 同时属于分区 ${owner} 与 ${id}`));
+        partitionOwner.set(nodeId, id);
+      }
+    }
+    for (const partition of partitions) {
+      const parentId = String(partition.parentId ?? '').trim();
+      if (parentId && !partitionById.has(parentId)) errors.push(issue('partition-parent-unknown', `分区 ${partition.id} 的父分区不存在：${parentId}`));
+      // nodeRefs 表示直接归属；父域的间接成员由层级关系推导。
+    }
+    const seen = new Set<string>();
+    const active = new Set<string>();
+    const visit = (id: string) => {
+      if (active.has(id)) { errors.push(issue('partition-cycle', `协调域树存在环：${id}`)); return; }
+      if (seen.has(id)) return;
+      seen.add(id); active.add(id);
+      const parent = String(partitionById.get(id)?.parentId ?? '').trim();
+      if (parent && partitionById.has(parent)) visit(parent);
+      active.delete(id);
+    };
+    for (const id of partitionById.keys()) visit(id);
+    const delegation = coordination.delegation;
+    if (delegation?.maxFanout !== undefined && (!Number.isInteger(Number(delegation.maxFanout)) || Number(delegation.maxFanout) < 1))
+      errors.push(issue('delegation-fanout-invalid', 'delegation.maxFanout 必须是正整数'));
+    if (coordination.maxQueuedTasks !== undefined && (!Number.isInteger(Number(coordination.maxQueuedTasks)) || Number(coordination.maxQueuedTasks) < 1))
+      errors.push(issue('coordination-queue-limit-invalid', 'coordination.maxQueuedTasks 必须是正整数'));
+    if (coordination.ratePerSecond !== undefined && (!Number.isFinite(Number(coordination.ratePerSecond)) || Number(coordination.ratePerSecond) <= 0))
+      errors.push(issue('coordination-rate-invalid', 'coordination.ratePerSecond 必须大于 0'));
+  }
+
+  // 协调边界：大规模并行时，先分组/分层，不靠“多开 Agent”本身解决问题。
   if (ids.size >= 20 && !coordination?.enabled) {
     warnings.push(`节点数 ${ids.size} 较大：建议启用 coordination（分组/并发上限/协调策略），否则容易变成无结构并行`);
   }
@@ -370,7 +451,11 @@ export function commitGraph(store: Store, specInput: GraphSpec): GraphCommitResu
     store.state.meta.set('wish_max_parallel', String(maxParallel));
     store.state.meta.set('wish_budget_tokens', String(budgetTokens));
     // 无条件写事件：wish 为空时内存也会被覆盖，若不留痕，重启后 meta 会回退到旧值。
-    store.journal.append('wish_submitted', null, { wish_id: wishId, text: String(spec.wish ?? ''), maxParallel, budgetTokens });
+    const coordination = JSON.stringify(plan.coordination ?? null);
+    store.state.meta.set('graph_coordination', coordination);
+    const graphMaxParallel = spec.policies?.maxParallel == null ? null : maxParallel;
+    store.state.meta.set('graph_max_parallel', String(graphMaxParallel ?? ''));
+    store.journal.append('wish_submitted', null, { wish_id: wishId, text: String(spec.wish ?? ''), maxParallel, budgetTokens, graphCoordination: coordination, graphMaxParallel });
     for (const nodeId of plan.order) {
       const raw = byId.get(nodeId)!;
       addNode(store, {
@@ -434,6 +519,7 @@ export function graphSpecTemplate(wish = ''): GraphSpec {
       },
     ],
     policies: { maxParallel: 2, maxDepth: 3, budgetTokens: 0 },
-    notes: ['节点数量由工作决定，不由团队规模决定；强依赖必须显式 deps'],
+    coordination: { enabled: false, strategy: 'hierarchical-partitions', maxActive: 16, maxQueuedTasks: 10000, ratePerSecond: 100, partitions: [], delegation: { enabled: false, maxFanout: 16, requireIdempotencyKey: true }, aggregation: {} },
+    notes: ['节点数量由工作决定，不由团队规模决定；强依赖必须显式 deps；管理关系与执行 deps 分离'],
   };
 }

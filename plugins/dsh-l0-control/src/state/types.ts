@@ -214,6 +214,13 @@ export interface FsPort {
   mkdirp(path: string): Promise<void>;
   /** 读原始字节区间（torn line 截断修复用）。 */
   truncate(path: string, size: number): Promise<void>;
+  /**
+   * 改名/移动。journal 分段滚动用它把当前段封存成 `journal.NNNN.jsonl`。
+   *
+   * 必须是**单步原子**语义（同目录 rename）：非原子的「读+写+删」在中间崩溃时
+   * 会同时留下新旧两份，恢复时无法判断权威。
+   */
+  rename(from: string, to: string): Promise<void>;
 }
 
 export interface LockRecord {
@@ -276,6 +283,18 @@ export interface StoreOptions {
   /** 只读模式（拒绝任何 append / checkpoint）。 */
   readonly?: boolean;
   now?: () => number;
+  /**
+   * 单个段文件的滚动阈值（字节，默认 64 MB；`0` = 不滚动）。
+   *
+   * 为什么要有它——**单文件有物理上限**，不是性能问题：`readFileSync(path,'utf8')`
+   * 要建一个字符串，而 V8 的 `MAX_STRING_LENGTH` 是 512 MB。实测（Node v24.9.0）：
+   * 64 / 256 MB 读得动，**512 MB 直接 `ERR_STRING_TOO_LONG`**。真实 journal 528 B/行
+   * ⇒ 约 102 万行（≈50 万节点）就到顶，再多就**根本读不进来**。
+   *
+   * 默认 64 MB 刻意偏保守：绝大多数部署永远只有一个 `journal.jsonl`（行为与以前
+   * 完全一致），只有真跑到几十万节点才会出现第 2 段。每个段都远低于 512 MB 上限。
+   */
+  segmentMaxBytes?: number;
 }
 
 export interface AppendInput {

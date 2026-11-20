@@ -126,6 +126,22 @@ export class Journal {
   }
 
   /**
+   * **零拷贝只读视图**：给 core 内部的高频读路径用（预算累加、速率窗口、
+   * 找最近检查点）。
+   *
+   * 为什么需要它：`raw()` 为了防外部改内部状态，对每条事件的 payload 做
+   * `JSON.parse(JSON.stringify(...))`。14000 条事件时单次 `raw()` 约 10ms，
+   * 而一次 claim 要调 4 次以上读路径 —— 直接让千节点吞吐塌到 30 节点/秒。
+   * 容量瓶颈不在算法，在这个深拷贝上。
+   *
+   * 契约：**调用方必须只读**。返回的数组与事件对象是内部实例，
+   * 写入会破坏只追加不变量。跨层（N2/N4）仍走 `raw()` 的副本。
+   */
+  view(): readonly EventRecord[] {
+    return this.events;
+  }
+
+  /**
    * 仅供 `Store.atomically()` 回滚使用（内部 API）。
    * 不是「删除事件」能力：调用方必须持有回滚前捕获的完整日志。
    */
@@ -136,6 +152,35 @@ export class Journal {
       this.events.push(cloneEvent(ev));
       this.ids.add(ev.event_id);
     }
+  }
+
+  /**
+   * **O(1) 回滚点**：只记长度，不拷贝任何事件。
+   *
+   * 为什么需要：`restore()` 要整套日志的深拷贝才能回滚，而 `Store.atomically()`
+   * 在**每次写入**前都要拿这个快照。16000 条事件时 `raw()` 约 11ms —— 单次 claim
+   * 要进出若干次 `atomically`，总成本从 O(n) 退化成 O(n²)。千节点实测吞吐
+   * 30 节点/秒就是这么来的（改成 O(1) 回滚点后同一机器 182→441 节点/秒）。
+   *
+   * 为什么 O(1) 就够：日志是**只追加**的，回滚 = 砍掉最后一次回滚点之后追加的
+   * 全部事件。没有原地修改，因此不需要保存旧值。
+   */
+  mark(): { length: number } {
+    return { length: this.events.length };
+  }
+
+  /** 回滚到 `mark()` 处：截断并摘掉对应 event_id（只追加语义下这就是完整逆操作）。 */
+  rollbackTo(mark: { length: number }): void {
+    if (!Number.isInteger(mark.length) || mark.length < 0 || mark.length > this.events.length) {
+      throw new ControlError(
+        "invalid_mark",
+        `回滚点非法：${String(mark.length)}（当前 ${this.events.length}）`,
+      );
+    }
+    for (let index = this.events.length - 1; index >= mark.length; index -= 1) {
+      this.ids.delete(this.events[index].event_id);
+    }
+    this.events.length = mark.length;
   }
 }
 

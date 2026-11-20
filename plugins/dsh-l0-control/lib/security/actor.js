@@ -49,9 +49,28 @@ export function pickInstanceFromArgs(
 }
 
 /** 解析调用者：永远返回一个 actor（不抛错），无法判定时是 plugin。 */
-export function resolveActor(input                   )            {
-  const { args, exec, tenant, roleOfInstance } = input;
-  const picked = pickInstanceFromArgs(args, roleOfInstance);
+export function resolveActor(input                       
+     
+                                   
+    
+                                  
+                                                    
+                                        
+                                                  
+                                                           
+                     
+    
+                                                       
+     
+                            
+ )            {
+  const { args, exec, tenant, roleOfInstance, excludeProducer } = input;
+  const picked = excludeProducer
+    ? pickInstanceFromArgs(
+        args ? { instanceId: args.instanceId, auditor_instance: args.auditor_instance, auditorInstance: args.auditorInstance } : args,
+        roleOfInstance,
+      )
+    : pickInstanceFromArgs(args, roleOfInstance);
   if (picked) {
     const role = roleOfInstance(picked)          ;
     return { id: picked, kind: 'agent', tenant, roles: [role] };

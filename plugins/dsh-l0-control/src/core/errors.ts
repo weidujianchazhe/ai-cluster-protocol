@@ -4,12 +4,32 @@
  * 约定：所有「拒绝」都必须在任何状态写入 / 事件追加之前抛出。
  */
 
+/**
+ * 准入闸门：与派活计划层（`dispatch/dispatcher.ts` 的 `DispatchGate`）用**同一套词汇**。
+ *
+ * 为什么必须同一套：两层对同一节点给出不同原因，现场会自相矛盾——
+ * 计划说「被 queue 挡」→ 运维去调 `maxQueuedTasks`；claim 却回 `graph_capacity`
+ * → 运维转头去调 `maxParallel`。两个动作都做了，问题还在。
+ */
+export type AdmissionGate =
+  /** 全图活跃租约触顶（`maxParallel` / 协调域 `maxActive`） */
+  | "capacity"
+  /** 某协调域 `maxActive` 触顶（局部原因，同图其它域不受影响） */
+  | "partition"
+  /** 领取层速率窗口触顶 */
+  | "rate"
+  /** 预算耗尽 */
+  | "budget";
+
 export class ControlError extends Error {
   readonly code: string;
-  constructor(code: string, message: string) {
+  /** 拒绝时命中的闸门；非限流类拒绝（状态不对、租约被占）没有这个字段。 */
+  readonly gate?: AdmissionGate;
+  constructor(code: string, message: string, gate?: AdmissionGate) {
     super(message);
     this.name = "ControlError";
     this.code = code;
+    if (gate) this.gate = gate;
   }
 }
 
@@ -49,8 +69,8 @@ export class DuplicateEvidence extends EvidenceError {
 }
 
 export class LeaseError extends ControlError {
-  constructor(message: string, code = "lease_error") {
-    super(code, message);
+  constructor(message: string, code = "lease_error", gate?: AdmissionGate) {
+    super(code, message, gate);
     this.name = "LeaseError";
   }
 }
@@ -73,6 +93,13 @@ export class FencingError extends LeaseError {
   constructor(message: string) {
     super(message, "fencing");
     this.name = "FencingError";
+  }
+}
+
+export class BudgetError extends ControlError {
+  constructor(message: string, code = "budget_exceeded", gate?: AdmissionGate) {
+    super(code, message, gate);
+    this.name = "BudgetError";
   }
 }
 

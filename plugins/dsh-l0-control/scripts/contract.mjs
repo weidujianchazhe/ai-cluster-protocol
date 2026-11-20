@@ -115,6 +115,11 @@ const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'l0control-contract-
 fs.writeFileSync(path.join(workspaceRoot, 'present.txt'), 'ok\n', 'utf8');
 
 const caller = { id: 'session-contract-caller' };
+const auditCaller = { id: 'session-contract-auditor' };
+const adapterInstances = new Map([
+  ['session-contract-caller', 'ROLE-CODE-01'],
+  ['session-contract-auditor', 'ROLE-AUDIT_CODE-01'],
+]);
 const dirtyMembers = [
   { id: 'session-1', name: 'lead', role: 'lead', status: 'running', model: 'm', provider: undefined, diagnostics: ['x'], context: 'fork' },
   { id: 'session-2', name: 'peer', role: 'teammate', status: 'inactive', model: 'm', provider: 'spawn', diagnostics: [], context: 'fresh' },
@@ -131,7 +136,7 @@ const fakeAgentTeams = {
 const provided = {};
 const registered = [];
 const ctx = {
-  get: (key) => (key === 'agentTeams' ? fakeAgentTeams : undefined),
+  get: (key) => key === 'agentTeams' ? fakeAgentTeams : key === 'l0adapter' ? { report: () => ({ instances: [...adapterInstances].map(([sessionId, instanceId]) => ({ sessionId, instanceId })) }) } : undefined,
   provide: (key, value) => {
     provided[key] = value;
   },
@@ -161,13 +166,14 @@ const calls = {
         verifier: 'contract',
         acceptance: { kind: 'contains', expected: 'ok' },
         producer_instance: 'ROLE-CODE-01',
+        fencingToken: 1,
       },
       exec.agent,
     ),
   verify_done: () =>
     service.verifyDone(
-      { nodeId: 'N-1', acceptance: { kind: 'exists' }, producer_instance: 'ROLE-CODE-01', auditor_instance: 'ROLE-AUDIT_CODE-01' },
-      exec.agent,
+      { nodeId: 'N-1', acceptance: { kind: 'exists' }, producer_instance: 'ROLE-CODE-01', auditor_instance: 'ROLE-AUDIT_CODE-01', fencingToken: 1 },
+      auditCaller,
     ),
   decide: () => service.decide({ decisionId: 'DEC-1', level: 'L0', optionId: 'default' }),
   pass_gate: () => service.passGate({ stage: 'research', evidence_refs: ['README.md'] }),
@@ -180,20 +186,20 @@ const calls = {
 const gateCases = [
   {
     name: 'evidence_submit#producer-unknown',
-    run: () => service.evidenceSubmit({ nodeId: 'N-2', artifactPath: 'present.txt' }, exec.agent),
+    run: () => service.evidenceSubmit({ nodeId: 'N-2', artifactPath: 'present.txt', fencingToken: 1 }),
     expect: 'producer-unknown',
   },
   {
     name: 'verify_done#auditor-required',
-    run: () => service.verifyDone({ nodeId: 'N-2', producer_instance: 'ROLE-CODE-01' }, exec.agent),
+    run: () => service.verifyDone({ nodeId: 'N-2', producer_instance: 'ROLE-CODE-01', fencingToken: 1 }),
     expect: 'auditor-required',
   },
   {
     name: 'verify_done#audit-independence-violated',
     run: () =>
       service.verifyDone(
-        { nodeId: 'N-2', producer_instance: 'ROLE-AUDIT_CODE-01', auditor_instance: 'ROLE-AUDIT_CODE-01' },
-        exec.agent,
+        { nodeId: 'N-2', producer_instance: 'ROLE-AUDIT_CODE-01', fencingToken: 1 },
+        auditCaller,
       ),
     expect: 'audit-independence-violated',
   },
@@ -201,7 +207,7 @@ const gateCases = [
     name: 'verify_done#auditor-role-required',
     run: () =>
       service.verifyDone(
-        { nodeId: 'N-2', producer_instance: 'ROLE-CODE-01', auditor_instance: 'ROLE-CODE-02' },
+        { nodeId: 'N-2', producer_instance: 'ROLE-CODE-02', fencingToken: 1 },
         exec.agent,
       ),
     expect: 'auditor-role-required',
@@ -214,14 +220,14 @@ const gateCases = [
   {
     name: 'evidence_submit#acceptance-required',
     run: () =>
-      service.evidenceSubmit({ nodeId: 'N-5', artifactPath: 'present.txt', producer_instance: 'ROLE-CODE-01' }, exec.agent),
+      service.evidenceSubmit({ nodeId: 'N-5', artifactPath: 'present.txt', producer_instance: 'ROLE-CODE-01', fencingToken: 1 }, exec.agent),
     expect: 'acceptance-required',
   },
   {
     name: 'evidence_submit#key-conflict',
     run: () =>
       service.evidenceSubmit(
-        { nodeId: 'N-3', artifactPath: 'present.txt', producer_instance: 'ROLE-CODE-01', producerInstance: 'ROLE-CODE-02' },
+        { nodeId: 'N-3', artifactPath: 'present.txt', producer_instance: 'ROLE-CODE-01', producerInstance: 'ROLE-CODE-02', fencingToken: 1 },
         exec.agent,
       ),
     expect: 'key-conflict',
@@ -230,7 +236,7 @@ const gateCases = [
     name: 'evidence_submit#camel-alias-accepted',
     run: async () => {
       const value = await service.evidenceSubmit(
-        { nodeId: 'N-4', artifactPath: 'present.txt', producerInstance: 'ROLE-CODE-01' },
+        { nodeId: 'N-4', artifactPath: 'present.txt', producerInstance: 'ROLE-CODE-01', fencingToken: 1 },
         exec.agent,
       );
       // 别名归一化后应走到 core（而不是 producer-unknown）

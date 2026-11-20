@@ -150,6 +150,9 @@ export function detectCycles(store: Store): string[][] {
 // ---------------------------------------------------------------------------
 
 export function addNode(store: Store, input: AddNodeInput): NodeRecord {
+  // 节点增删 / 依赖变更 / 状态迁移都可能改变「就绪集合」，统一在这里让 ready 缓存失效。
+  // 放在校验之前是**刻意**的：多失效一次只是多排一次序，而漏失效会派错节点。
+  store.bumpEpoch();
   const { nodeId, title, spec } = input;
   if (!nodeId || !title || !spec) throw new GraphError("nodeId / title / spec 必填");
   const status = input.status ?? "planned";
@@ -188,6 +191,7 @@ export function addNode(store: Store, input: AddNodeInput): NodeRecord {
 }
 
 export function addEdge(store: Store, from: string, to: string, kind: EdgeKind): void {
+  store.bumpEpoch();
   if (!EDGE_KINDS.includes(kind)) throw new GraphError(`非法边类型：${kind}`);
   for (const id of [from, to]) {
     if (!store.state.nodes.has(id)) throw new GraphError(`节点不存在：${id}`);
@@ -200,6 +204,7 @@ export function addEdge(store: Store, from: string, to: string, kind: EdgeKind):
 }
 
 export function removeNode(store: Store, nodeId: string, options: { allowTerminal?: boolean } = {}): NodeRecord {
+  store.bumpEpoch();
   const node = store.state.nodes.get(nodeId);
   if (!node) throw new GraphError(`节点不存在：${nodeId}`);
   if (isTerminal(node.status) && !options.allowTerminal) {
@@ -217,6 +222,7 @@ export function removeNode(store: Store, nodeId: string, options: { allowTermina
 }
 
 export function setEdges(store: Store, nodeId: string, deps: string[]): string[] {
+  store.bumpEpoch();
   const node = store.state.nodes.get(nodeId);
   if (!node) throw new GraphError(`节点不存在：${nodeId}`);
   const next = [...new Set(deps)];
@@ -402,6 +408,7 @@ export function setStatus(
   status: NodeStatus,
   options: SetStatusOptions = {},
 ): NodeRecord {
+  store.bumpEpoch();
   if (!isNodeStatus(status)) throw new GraphError(`非法状态：${String(status)}`);
   const node = store.state.nodes.get(nodeId);
   if (!node) throw new GraphError(`节点不存在：${nodeId}`);

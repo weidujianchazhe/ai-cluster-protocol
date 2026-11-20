@@ -8,7 +8,7 @@
  */
 import { DuplicateEvidence, EvidenceError } from "./errors.ts";
 import { ALIASES, pickAlias, pickNumber, pickString } from "./alias.ts";
-import type { Artifact, EvidenceRecord, Provenance, Verdict } from "./types.ts";
+import type { Artifact, ContextRef, EvidenceRecord, Provenance, Verdict } from "./types.ts";
 import { PROVENANCES, VERDICTS } from "./types.ts";
 import type { Store } from "./store.ts";
 
@@ -39,6 +39,10 @@ export interface AddEvidenceInput {
    * `inferred` / `assumed` 的证据可以落账、可以进报告，但**不能**支撑节点进 done。
    */
   provenance?: Provenance;
+  /** 本次证据声明的 token 消耗（可选，缺省 0）。 */
+  usageTokens?: number;
+  /** 因果标注：我读了谁的什么（见 ContextRef）。缺省 []，不填不影响完成判定。 */
+  contextRefs?: ContextRef[];
 }
 
 /**
@@ -226,6 +230,50 @@ export function addEvidence(store: Store, input: AddEvidenceInput): EvidenceReco
   if (store.state.evidence.has(evidenceId)) {
     throw new DuplicateEvidence(`证据已存在且不可覆盖：${evidenceId}`);
   }
+  const usageRaw = Number(pickAlias(raw, ALIASES.usageTokens) ?? input.usageTokens ?? 0);
+  const usageTokens = Number.isFinite(usageRaw) && usageRaw > 0 ? Math.floor(usageRaw) : 0;
+
+  /**
+   * 因果标注校验（`contextRefs`）。
+   *
+   * 三条判据，都只拦**明确错误**，不拦"合理的少见情况"：
+   *   1. 被引用节点**必须存在** —— 引用了图里没有的节点是拼写错误或幻觉，必须拒；
+   *   2. **不能引用自己** —— 自引用会造成假的耦合度；
+   *   3. 被引用节点**不要求已 done** —— 参考"进行中节点"是真实协作，只是风险高，
+   *      强制 done 会把这类排除掉。它的状态会在 `collaboration_map` 里显示出来供人判断。
+   *
+   * 不校验的部分：`how` 文本内容、`evidenceId` 是否真属于那个节点。
+   * 理由是**不做过度校验**——这一层是"声明"，不是"证明"；证明留给将来的产物引用检查。
+   */
+  const contextRefs: ContextRef[] = [];
+  const rawRefs = (input as { contextRefs?: unknown }).contextRefs
+    ?? (raw as { context_refs?: unknown }).context_refs;
+  if (rawRefs !== undefined && rawRefs !== null) {
+    if (!Array.isArray(rawRefs)) throw new EvidenceError("contextRefs 必须是数组");
+    for (const item of rawRefs) {
+      if (!item || typeof item !== "object") throw new EvidenceError("contextRefs 的元素必须是对象");
+      const r = item as Record<string, unknown>;
+      const refNode = String(r.nodeId ?? r.node_id ?? "");
+      if (!refNode) throw new EvidenceError("contextRefs 每项必须有 nodeId");
+      if (refNode === nodeId) throw new EvidenceError(`contextRefs 不能引用自己：${nodeId}`);
+      if (!store.state.nodes.has(refNode)) {
+        throw new EvidenceError(`contextRefs 引用了不存在的节点：${refNode}`);
+      }
+      contextRefs.push({
+        nodeId: refNode,
+        ...(typeof r.evidenceId === "string" && r.evidenceId ? { evidenceId: r.evidenceId } : {}),
+        ...(typeof r.how === "string" && r.how ? { how: r.how } : {}),
+      });
+    }
+    // 去重（同一节点引用两次没有意义，会让耦合度虚高）
+    const seen = new Set<string>();
+    for (let i = contextRefs.length - 1; i >= 0; i -= 1) {
+      const key = `${contextRefs[i].nodeId}::${contextRefs[i].evidenceId ?? ""}`;
+      if (seen.has(key)) contextRefs.splice(i, 1);
+      else seen.add(key);
+    }
+  }
+
   const record: EvidenceRecord = {
     evidence_id: evidenceId,
     node_id: nodeId,
@@ -238,6 +286,8 @@ export function addEvidence(store: Store, input: AddEvidenceInput): EvidenceReco
     producer_instance: producerInstance,
     auditor_instance: auditorInstance,
     provenance,
+    usage_tokens: usageTokens,
+    context_refs: contextRefs,
   };
   store.state.evidence.set(evidenceId, record);
   store.journal.append("evidence_added", nodeId, {
@@ -252,6 +302,8 @@ export function addEvidence(store: Store, input: AddEvidenceInput): EvidenceReco
     artifact_id: artifactId,
     attempt_no: record.attempt_no,
     at: record.at,
+    usageTokens,
+    context_refs: contextRefs,
   });
   return record;
 }

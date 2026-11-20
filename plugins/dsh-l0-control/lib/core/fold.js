@@ -69,6 +69,8 @@ export function foldEvents(events               )        {
         if (p.text !== undefined) state.meta.set("wish_text", str(p.text));
         if (p.maxParallel !== undefined) state.meta.set("wish_max_parallel", str(p.maxParallel));
         if (p.budgetTokens !== undefined) state.meta.set("wish_budget_tokens", str(p.budgetTokens));
+        if (typeof p.graphCoordination === "string") state.meta.set("graph_coordination", p.graphCoordination);
+        if (p.graphMaxParallel !== undefined) state.meta.set("graph_max_parallel", str(p.graphMaxParallel ?? ''));
         break;
       }
       case "node_added": {
@@ -159,6 +161,16 @@ export function foldEvents(events               )        {
             : str(p.auditor_instance),
           // 老事件没有 provenance 字段 → 按 verified（引入该字段前的语义）
           provenance: str(p.provenance, "verified")              ,
+          // 老事件没有 context_refs → 空数组（因果标注引入前的语义：没有横向引用）
+          context_refs: Array.isArray(p.context_refs)
+            ? (p.context_refs                                  )
+                .filter((r) => r && typeof r.nodeId === "string" && r.nodeId)
+                .map((r) => ({
+                  nodeId: String(r.nodeId),
+                  ...(typeof r.evidenceId === "string" && r.evidenceId ? { evidenceId: r.evidenceId } : {}),
+                  ...(typeof r.how === "string" && r.how ? { how: r.how } : {}),
+                }))
+            : [],
         };
         state.evidence.set(evidenceId, record);
         break;
@@ -291,6 +303,9 @@ export function foldEvents(events               )        {
 export function rehydrate(store       )        {
   const folded = foldEvents(store.journal.all());
   store.state = folded;
+  // 整体替换 state 等同于「所有就绪相关状态都变了」：让 `readySet()` 的缓存失效。
+  // 缓存键里也有 `store.state` 对象身份兜底，这里 bump 是为了让意图显式。
+  store.bumpEpoch();
   return folded;
 }
 

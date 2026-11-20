@@ -60,12 +60,30 @@ for (const file of files) {
   }
   if (checkOnly) {
     const existing = fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
-    if (existing !== output) {
-      drift += 1;
-      results.push({ file: rel, status: 'stale' });
-    } else {
+    if (existing === output) {
       results.push({ file: rel, status: 'ok', specifiersRewritten });
+      continue;
     }
+    /**
+     * 字节不一致时**先分清两种原因**，别一律判 stale：
+     *
+     *   a) 真的忘了 build（源码改了、产物没跟上）—— 该红
+     *   b) **Node 版本不同**导致 `stripTypeScriptTypes()` 的 emit 差异（空白/注释/类型剥离细节）
+     *      —— 源码与产物在语义上一致，不该红
+     *
+     * 判据：把两边都去掉空白后比较。若归一化后相等，说明只差格式化 —— 记 `format-drift`，
+     * **不计入 drift**（不判失败），但**打印出来**让人知道为什么字节不同。
+     *
+     * 这个区分很关键：不加它，任何用不同 Node 版本的人第一次跑 `--check` 都会看到"全部 stale"，
+     * 然后误以为发布包是坏的。而实际上源码能构建、产物能加载，只是生成它的 Node 版本不同。
+     */
+    const normalize = (s) => (s ?? '').replace(/\s+/g, '');
+    if (existing !== null && normalize(existing) === normalize(output)) {
+      results.push({ file: rel, status: 'format-drift', note: '仅空白/格式差异（通常是 Node 版本不同），语义一致' });
+      continue;
+    }
+    drift += 1;
+    results.push({ file: rel, status: 'stale' });
     continue;
   }
   fs.mkdirSync(path.dirname(target), { recursive: true });

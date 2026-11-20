@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-l0-control-ui",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "author": "weidujianchazhe (如天之星)",
   "license": "MIT",
@@ -12,13 +12,24 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md"],
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-workspace"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
     }
   }
 }

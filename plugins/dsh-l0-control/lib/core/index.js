@@ -72,11 +72,34 @@ export {
   claim,
   currentLease,
   expire,
+  extendForAudit,
   release,
   renew,
   takeover,
 } from "./leases.js";
                                                                                
+
+// ── 质量度量与协作图（只读聚合，不参与任何判定）──
+export {
+  scoreNode,
+  qualityReport,
+  buildReworkIndex,
+  isSystemReworkReason,
+  SYSTEM_REWORK_REASONS,
+} from "./quality.js";
+                                                    
+export { collaborationMap } from "./collaboration.js";
+export { neighborhoodOf, partitionOf } from "./neighborhood.js";
+                                                                                                          
+                                                                                                    
+             
+              
+                
+               
+               
+                    
+                
+                      
 
 // ── N2 `service.ts` 约定的门面动作（R4 起全部落地，pending=[]）──
 export {
@@ -87,12 +110,20 @@ export {
   coreStore,
   decide,
   exportProjection,
+  graphCheckpoint,
   graphCommit,
   graphPlan,
+  graphRecover,
+  graphResumePlan,
   graphStatus,
+  dispatchPlan,
   heartbeatTask,
   nextTask,
   nodeGates,
+  collaborationStatus,
+  neighborhoodStatus,
+  qualityStatus,
+  reapExpiredLeases,
   rehydrateCore,
   resetCore,
   restoreCore,
@@ -100,6 +131,7 @@ export {
   submitWish,
   tickDecisions,
   verifyDone,
+  withCoreStore,
 } from "./facade.js";
              
                  
@@ -110,6 +142,15 @@ export {
                   
             
                      
+
+// ── 预算与速率（从 journal 推导，不另存计数器）──────────────────────
+export { assertBudget, budgetBlockedNodes, budgetView, claimsInWindow, tokenUsage } from "./budget.js";
+                                                                          
+export { leaseCapacity } from "./admission.js";
+
+// ── 分区检查点与恢复 ──────────────────────────────────────────────
+export { checkpointPartition, planPartitionResume, readLastCheckpoint, recoverFromCheckpoint } from "./checkpoint.js";
+                                                                           
 
 // ── replan（单事务）────────────────────────────────────────────────────
 export {
