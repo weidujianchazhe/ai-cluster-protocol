@@ -1,11 +1,11 @@
 {
   "name": "@local/dsh-l0-control",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "author": "weidujianchazhe (如天之星)",
   "license": "MIT",
   "type": "module",
-  "description": "AI集群工作协议：许愿式 DSH 集群工作插件。派发多个子 Agent 并行工作，子 Agent 可继续递归派发；工作量大、吞吐高，token 消耗也显著更高。",
+  "description": "DSH 集群工作插件：许愿式多 agent 并行编排（工作图 / 证据链审计 / 确定性派发 / 可回放）。wish-driven multi-agent orchestration for DSH with evidence-chain audit and deterministic dispatch。",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -23,11 +23,16 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "verify": "node scripts/build.mjs --check && node scripts/typecheck.mjs && node tests/verify-serializer.mjs && node tests/verify-ui-client.mjs && node tests/verify-ui-cors.mjs && node tests/verify-actor.mjs",
+    "verify": "node scripts/build.mjs --check && node scripts/typecheck.mjs && node tests/verify-serializer.mjs && node tests/verify-ui-client.mjs && node tests/verify-ui-locale.mjs && node tests/verify-ui-cors.mjs && node tests/verify-ui-with-recovery.mjs && node tests/verify-ui-e2e-snapshot.mjs && node tests/verify-actor.mjs && node tests/verify-audit-actor-resolution.mjs && node tests/verify-journal-views.mjs && node tests/verify-journal-incremental.mjs && node tests/verify-journal-shared-cache.mjs && node tests/verify-ready-incremental.mjs && node tests/verify-next-task-contract.mjs && node tests/verify-fault-injection.mjs && node tests/verify-enqueue-state.mjs && node tests/verify-spawn-failure.mjs && node tests/verify-dispatch-spawn-failure.mjs && node tests/verify-host-backoff.mjs && node tests/verify-queue-backpressure.mjs && node tests/verify-dispatch-gates.mjs && node tests/verify-admission-gates.mjs && node tests/verify-gate-history.mjs && node tests/verify-rate-accounting.mjs && node tests/verify-observability-view.mjs && node tests/verify-dispatch-view-bounded.mjs && node tests/verify-lease-admission.mjs && node tests/verify-lease-reap.mjs && node tests/verify-submitted-lease-deadlock.mjs && node tests/verify-audit-lease-ttl.mjs && node tests/verify-coordinator.mjs && node tests/verify-budget-scope.mjs && node tests/verify-rate-cross-tick.mjs && node tests/verify-dispatch-enqueue.mjs && node tests/verify-checkpoint-recover.mjs && node tests/verify-partition-recovery-drill.mjs && node tests/verify-replay-guard.mjs && node tests/verify-state-scale.mjs && node tests/verify-verify-done-producer.mjs && node tests/verify-team-limit-fallback.mjs && node tests/verify-team-limit-raise.mjs && node tests/verify-subagent-capacity.mjs && node tests/verify-journal-segments.mjs && node tests/verify-persist-incremental.mjs && node tests/e2e/autonomy/run.mjs && node tests/e2e/scale/run.mjs --nodes 60 --workers 4 && node tests/verify-agent-preset.mjs && node tests/verify-host-services.mjs && node tests/verify-quality.mjs && node tests/verify-collaboration.mjs && node tests/verify-rework-attribution.mjs && node tests/verify-neighborhood.mjs && node tests/verify-edge-cases.mjs && node tests/verify-storage-health.mjs && node tests/verify-docs-alignment.mjs && node tests/verify-no-temp-leak.mjs",
     "selftest": "node scripts/selftest.mjs",
+    "bench": "node tests/bench-thousand.mjs",
+    "bench:stability": "node tests/bench-stability.mjs",
+    "bench:scaling": "node tests/bench-scaling.mjs",
+    "bench:service": "node tests/e2e/scale/run.mjs --nodes 1000 --workers 16",
     "contract": "node scripts/contract.mjs",
     "persistence": "node scripts/persistence-check.mjs",
-    "native-check": "node tests/e2e/native-real/check.mjs"
+    "native-check": "node tests/e2e/native-real/check.mjs",
+    "sim:cluster": "node tests/e2e/sim/run.mjs"
   },
   "dsh": {
     "bundle": {
@@ -37,5 +42,18 @@
   "devDependencies": {
     "@types/node": "^22.20.5",
     "typescript": "5.9"
-  }
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "keywords": [
+    "dsh",
+    "agent-orchestration",
+    "multi-agent",
+    "workflow-engine",
+    "developer-tools",
+    "typescript",
+    "evidence-chain",
+    "audit"
+  ]
 }
