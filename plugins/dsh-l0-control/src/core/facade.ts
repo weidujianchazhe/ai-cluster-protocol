@@ -15,6 +15,9 @@ import { assertFencing, claim, currentLease, expire, extendForAudit, renew } fro
 import { qualityReport } from "./quality.ts";
 import { collaborationMap } from "./collaboration.ts";
 import { neighborhoodOf } from "./neighborhood.ts";
+import { organizationReview, routeContextOf } from "./organization.ts";
+import { currentGraphVersion, replan } from "./replan.ts";
+import { ReplanError } from "./errors.ts";
 
 /** 审计窗口的默认租约长度（秒）。理由见 `extendForAudit`。 */
 export const DEFAULT_AUDIT_LEASE_TTL_SEC = 600;
@@ -36,6 +39,22 @@ import { commitGraph, graphSpecTemplate, planGraph } from "./graphspec.ts";
 import { runFactorGuards } from "./guards.ts";
 import { normalizeDispatchOptions, planDispatchTick } from "./dispatcher.ts";
 import type { Lease } from "./types.ts";
+
+/**
+ * **执行职务标签** —— 与 `native/worker.ts` 的 `ROLE_PROFILES` keys 保持一致。
+ *
+ * 注意它**不等于** `security/roles.ts` 的 `ROLES`：后者是授权主体标签（含 HUMAN / ORCH /
+ * OBS / PLUGIN 等），不是 worker 执行职务。`RESEARCH` / `DELIVER` 虽然还在权限表里，
+ * 但不在 `ROLE_PROFILES` 中；它们作为节点 capability 时应视为**自由能力标签**，
+ * 而不是一个不存在的 worker role。
+ *
+ * core 层不反向 import `native/worker.ts`，所以这里声明一份；
+ * `tests/verify-role-tool-consistency.mjs` 保证它与 `LEGAL_WORKER_ROLES` 精确一致。
+ */
+export const KNOWN_CAPABILITY_ROLES: ReadonlySet<string> = new Set([
+  "CODE", "DESIGN", "TEST", "EVIDENCE",
+  "AUDIT_CODE", "AUDIT_EVIDENCE", "AUDIT_DESIGN", "OPS",
+]);
 
 let sharedStore: Store | null = null;
 const storeScope = new AsyncLocalStorage<Store>();
@@ -627,9 +646,35 @@ export function nextTask(input: NextTaskInput = {}): Record<string, unknown> {
    * （本函数一次 + `recomputeReady` 里一次）是纯粹的固定税。
    */
   const ready = readySet(store);
-  const role = input.role?.trim();
+  const role = input.role?.trim().toUpperCase();
+  /**
+   * `role` 只在它是**已知职务标签**时才当过滤器用 —— 这是与旧实现的唯一差别，
+   * 但差异很大。
+   *
+   * 节点的 `capability` 有两种语义（见 `graphspec.ts` 的 `NodeSpec` 注释：
+   * 「自由能力标签（不是固定角色枚举）」）：
+   *
+   * | 节点 capability | 含义 | 该给谁 |
+   * |---|---|---|
+   * | `CODE` / `AUDIT_CODE` …（已知职务） | 「这类活归这个职务」 | 只有同职务 |
+   * | `distributed-systems-analysis`（自由标签） | 「需要这种能力」 | **所有 worker**（谁有本事谁做） |
+   * | 未设 | 不限制 | 所有 worker |
+   *
+   * 旧实现把两种情况都按 `capability === role` 等值比较，于是自由标签**永远匹配不上任何 role**
+   * （`role` 只能是职务名），自由能力标签形同废纸 —— 工作图声明了需要某种能力，
+   * 却没有任何 worker 能领到那个节点。
+   *
+   * 现在：已知职务 → 职务过滤；自由标签/未设 → 对所有人开放。
+   * 「开放」不等于「无冲突保护」：抢同一个节点仍然由租约 + `fencingToken` 把关。
+   */
   const candidates = role
-    ? ready.filter((nodeId) => ((getNode(store, nodeId)?.capability ?? "") as string).toUpperCase() === role.toUpperCase())
+    ? ready.filter((nodeId) => {
+        const cap = String(getNode(store, nodeId)?.capability ?? "").toUpperCase();
+        // 未设 capability、或自由能力标签 → 对所有 worker 开放
+        if (!cap || !KNOWN_CAPABILITY_ROLES.has(cap)) return true;
+        // 已知职务标签 → 只给同职务
+        return cap === role;
+      })
     : ready;
   const taskId = candidates[0] ?? null;
   const task = taskId ? getNode(store, taskId) ?? null : null;
@@ -1412,5 +1457,58 @@ export function neighborhoodStatus(options: { nodeId: string; direction?: string
     }) as unknown as Record<string, unknown>;
   } catch (error) {
     return { ok: false, error: String((error as Error)?.message ?? error) };
+  }
+}
+
+/**
+ * 组织审查（工具入口）。**只读**：不派活、不改图、不裁决。
+ *
+ * 纯函数在 core/organization.ts；这里是拿 store + 兜住异常的唯一职责。
+ */
+export function organizationStatus(options: { generatedAt?: string } = {}): Record<string, unknown> {
+  const store = coreStore();
+  try {
+    return organizationReview(store, {
+      routeCtx: routeContextOf(store),
+      generatedAt: options?.generatedAt ? String(options.generatedAt) : undefined,
+    }) as unknown as Record<string, unknown>;
+  } catch (error) {
+    return { ok: false, error: String((error as Error)?.message ?? error) };
+  }
+}
+
+/**
+ * 重规划（工具入口）。**唯一会改图的协调动作**，因此：
+ *   - `expectedGraphVersion` 必填（CAS）：旧组织审查结果不得覆盖新图；
+ *   - 失败不吞异常，转成结构化错误码（`replan_stale_graph` 等），调用方可据此重读再试。
+ */
+export function graphReplan(input: {
+  reason: string;
+  expectedGraphVersion: number;
+  add?: unknown[];
+  remove?: string[];
+  setDeps?: Record<string, string[]>;
+  note?: string | null;
+}): Record<string, unknown> {
+  const store = coreStore();
+  try {
+    const expected = Number(input?.expectedGraphVersion);
+    if (!Number.isFinite(expected)) {
+      return { ok: false, error: 'expected-graph-version-required', hint: '先读 graph_status.graph_version，再带同一个值提交；防止用过期协调结果覆盖新图。' };
+    }
+    const result = replan(store, {
+      reason: input.reason as never,
+      expectedGraphVersion: expected,
+      add: (input.add ?? []) as never,
+      remove: (input.remove ?? []).map(String),
+      setDeps: input.setDeps ?? {},
+      note: input.note ?? null,
+    });
+    return result as unknown as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof ReplanError) {
+      return { ok: false, error: error.code, message: error.message, actualGraphVersion: currentGraphVersion(store) };
+    }
+    return { ok: false, error: 'replan-failed', message: String((error as Error)?.message ?? error) };
   }
 }

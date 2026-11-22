@@ -199,6 +199,8 @@ export interface ReplanEvent {
   graph_version: number;
   added: string[];
   removed: string[];
+  /** 本次事务中重设的依赖边；老事件缺省为空数组。 */
+  rewired?: Array<{ node_id: string; from: string[]; to: string[] }>;
   note: string | null;
 }
 

@@ -56,6 +56,11 @@ const ACTION_BY_TOOL: Record<string, string> = {
   project_init: 'project.init',
   graph_plan: 'graph.read',
   graph_commit: 'graph.write',
+  // 组织审查是只读投影：按 graph.read 授权即可（它不写 journal、不改图）。
+  organization_review: 'graph.read',
+  // **必须显式登记**：未登记的动作会落到默认值 `graph.read`，
+  // 那样一个只读角色就能改图——这是唯一会改图的协调入口，不能靠默认值。
+  graph_replan: 'graph.write',
   memory_load: 'memory.load',
   memory_writeback: 'memory.write',
 };

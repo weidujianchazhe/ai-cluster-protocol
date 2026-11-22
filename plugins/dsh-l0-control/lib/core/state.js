@@ -43,6 +43,16 @@ import { readySet } from "./ready.js";
                        
                         
                         
+                                                                   
+                      
+                       
+                            
+                                                                       
+                      
+                             
+                     
+                         
+     
                      
                                                  
                       
@@ -134,6 +144,18 @@ export function buildClusterState(
     conflicts,
     options.routeCtx ?? { availableCapabilities: new Map(), catalogCapabilities: [] },
   );
+  const coordinationRaw = store.state.meta.get('graph_coordination');
+  let coordination                                                                                                                                                                  = null;
+  try { coordination = coordinationRaw ? JSON.parse(coordinationRaw) : null; } catch { coordination = null; }
+  const nodeById = new Map(nodes.map((node) => [node.node_id, node]));
+  const integrationFindings                                           = (coordination?.organization?.integrationContracts ?? []).map((contract) => {
+    const members = [...new Set(contract.nodeRefs ?? [])].map((id) => nodeById.get(id)).filter((node)                     => Boolean(node));
+    const integrationNode = nodeById.get(contract.integrationNode);
+    const missing = members.filter((node) => node.status !== 'done' && node.status !== 'accepted').map((node) => node.node_id);
+    const integrationDone = integrationNode?.status === 'done' || integrationNode?.status === 'accepted';
+    const status                                                             = missing.length ? 'waiting-members' : integrationDone ? 'integrated' : 'ready-for-integration';
+    return { contractId: contract.id, integrationNode: contract.integrationNode, status, members: [...new Set(contract.nodeRefs ?? [])].map(String), missingMembers: missing, contract: contract.contract, acceptance: contract.acceptance };
+  });
 
   // ── 断言池：每条都必须能指回原始记录 ──
   const claims               = [];
@@ -168,6 +190,13 @@ export function buildClusterState(
       source: { kind: "conflict", ref: c.id },
     });
   }
+  for (const finding of integrationFindings.filter((item) => item.status !== 'integrated')) {
+    claims.push({
+      text: `集成契约 ${finding.contractId}：${finding.status === 'waiting-members' ? `等待成员完成（${finding.missingMembers.join(', ')}）` : `集成节点 ${finding.integrationNode} 待执行`}；契约：${finding.contract}`,
+      evidence: "inferred",
+      source: { kind: "meta", ref: `integration:${finding.contractId}` },
+    });
+  }
 
   // ── 下一步：从 ready + 冲突派生，每条带理由 ──
   const next               = [];
@@ -190,6 +219,27 @@ export function buildClusterState(
       source: `conflict:${c.id}`,
     });
   }
+  for (const finding of integrationFindings.filter((item) => item.status !== 'integrated').slice(0, 3)) {
+    if (finding.status === 'waiting-members') {
+      next.push({
+        action: `等待集成契约 ${finding.contractId} 的成员完成`,
+        reason: `未完成成员：${finding.missingMembers.join(', ')}；集成节点 ${finding.integrationNode} 不应提前运行。`,
+        source: `integration:${finding.contractId}`,
+      });
+    } else if (nodeById.has(finding.integrationNode)) {
+      next.push({
+        action: `执行集成节点 ${finding.integrationNode}`,
+        reason: `契约 ${finding.contractId} 的成员已完成；按契约验收：${finding.acceptance.join('；')}`,
+        source: `integration:${finding.contractId}`,
+      });
+    } else {
+      next.push({
+        action: `为集成契约 ${finding.contractId} 提出图调整`,
+        reason: `组织契约指定的集成节点 ${finding.integrationNode} 不在当前图中；需显式 replan 添加，不能静默忽略。`,
+        source: `integration:${finding.contractId}`,
+      });
+    }
+  }
   if (next.length === 0) {
     next.push({ action: "无待办", reason: "没有 ready 节点，也没有需要人的冲突", source: "readySet" });
   }
@@ -202,9 +252,13 @@ export function buildClusterState(
     claims,
     facets: [...facetRun.static, ...facetRun.dynamic],
     conflicts: routed,
+    integration: integrationFindings,
     next,
     cost: { journalEvents: store.journal.count(), nodes: nodes.length },
     chars: 0,
+    // 即时生成的状态永远「基于当前 seq」，所以这里恒为 false。真正的过期判断是
+    // `isStateStale(store)`（journal 相对上次 markStateBuilt 前进），或由调用方
+    // 拿 basedOnSeq 与当前 journal 计数比。不要把这个字段当过期信号用。
     stale: false,
   };
 

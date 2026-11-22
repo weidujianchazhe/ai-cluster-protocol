@@ -51,6 +51,23 @@ export interface CoordinationGroup {
   note?: string;
 }
 
+export interface IntegrationContract {
+  id: string;
+  /** 参与同一契约的两个或更多工作节点。 */
+  nodeRefs: string[];
+  /** 承担集成/一致性验收的普通图节点。 */
+  integrationNode: string;
+  /** 各参与节点必须共同满足的接口、格式或假设。 */
+  contract: string;
+  /** 集成节点用于裁决契约一致性的验收条件。 */
+  acceptance: string[];
+}
+
+/** 由任务需求选择性生成的组织因子；不预设固定角色树或常驻经理。 */
+export interface OrganizationSpec {
+  integrationContracts?: IntegrationContract[];
+}
+
 export interface CoordinationPartition {
   id: string;
   parentId?: string | null;
@@ -81,6 +98,8 @@ export interface CoordinationSpec {
   maxDepth?: number;
   groups?: CoordinationGroup[];
   partitions?: CoordinationPartition[];
+  /** 按需启用的组织协调规则，不预设固定管理层级。 */
+  organization?: OrganizationSpec;
   delegation?: DelegationPolicy;
   aggregation?: Record<string, AggregationPolicy>;
   maxQueuedTasks?: number;
@@ -293,7 +312,8 @@ export function planGraph(specInput: GraphSpec): GraphPlan {
 
   // 分区与协调关系独立于执行依赖 DAG；parentId 只描述管理归属，不生成阻塞边。
   const coordination = spec.coordination;
-  if (coordination && !coordination.enabled && (coordination.partitions?.length || coordination.delegation?.enabled)) warnings.push('coordination 因子已提供但 enabled=false；分区校验与调度策略未启用');
+  const organization = coordination?.organization;
+  if (coordination && !coordination.enabled && (coordination.partitions?.length || coordination.delegation?.enabled || organization?.integrationContracts?.length)) warnings.push('coordination 因子已提供但 enabled=false；分区校验与组织协调策略未启用');
   if (coordination?.enabled) {
     if (coordination.delegation?.enabled && !coordination.partitions?.length) warnings.push('动态委派已启用但当前无静态分区；运行时需提交 parentNodeId、revision 与幂等键，并受配置背压限制');
     const partitions = Array.isArray(coordination.partitions) ? coordination.partitions : [];
@@ -331,6 +351,40 @@ export function planGraph(specInput: GraphSpec): GraphPlan {
       active.delete(id);
     };
     for (const id of partitionById.keys()) visit(id);
+    const organization = coordination.organization;
+    if (organization) {
+      const contractIds = new Set<string>();
+      for (const contract of Array.isArray(organization.integrationContracts) ? organization.integrationContracts : []) {
+        const contractId = String(contract?.id ?? '').trim();
+        if (!contractId) {
+          errors.push(issue('integration-contract-id-required', 'coordination.organization.integrationContracts[].id 必填'));
+          continue;
+        }
+        if (contractIds.has(contractId)) errors.push(issue('integration-contract-id-duplicate', `重复的集成契约 id：${contractId}`));
+        contractIds.add(contractId);
+        const refs = Array.isArray(contract.nodeRefs) ? [...new Set(contract.nodeRefs.map((id) => String(id).trim()).filter(Boolean))] : [];
+        if (refs.length < 2) errors.push(issue('integration-contract-scope-invalid', `集成契约 ${contractId} 至少要关联两个不同成员节点`));
+        for (const nodeId of refs) {
+          if (!ids.has(nodeId)) errors.push(issue('integration-contract-unknown-node', `集成契约 ${contractId} 引用了未知成员节点 ${nodeId}`));
+        }
+        const integrationNodeId = String(contract.integrationNode ?? '').trim();
+        if (!integrationNodeId || !ids.has(integrationNodeId)) {
+          errors.push(issue('integration-node-unknown', `集成契约 ${contractId} 必须引用图内 integrationNode`));
+        } else {
+          if (refs.includes(integrationNodeId)) errors.push(issue('integration-node-in-members', `集成节点 ${integrationNodeId} 不能同时作为自己的参与成员`));
+          const integrationSpec = nodes.find((node) => String(node.nodeId) === integrationNodeId);
+          const deps = new Set((integrationSpec?.deps ?? []).map(String));
+          for (const memberId of refs) {
+            if (!deps.has(memberId)) errors.push(issue('integration-node-missing-dependency', `集成节点 ${integrationNodeId} 必须依赖契约成员 ${memberId}`));
+          }
+        }
+        if (!String(contract.contract ?? '').trim()) errors.push(issue('integration-contract-text-required', `集成契约 ${contractId} 缺 contract`));
+        if (!Array.isArray(contract.acceptance) || contract.acceptance.length === 0 || contract.acceptance.some((item) => !String(item ?? '').trim())) {
+          errors.push(issue('integration-contract-acceptance-required', `集成契约 ${contractId} 必须有非空 acceptance`));
+        }
+      }
+    }
+
     const delegation = coordination.delegation;
     if (delegation?.maxFanout !== undefined && (!Number.isInteger(Number(delegation.maxFanout)) || Number(delegation.maxFanout) < 1))
       errors.push(issue('delegation-fanout-invalid', 'delegation.maxFanout 必须是正整数'));
@@ -471,6 +525,9 @@ export function commitGraph(store: Store, specInput: GraphSpec): GraphCommitResu
         budget: {
           maxTokens: Number(raw.budget?.maxTokens ?? budgetTokens) || 0,
           maxParallel: Number(raw.budget?.maxParallel ?? maxParallel) || 2,
+          // writeScopes 以前只在校验里声明、落图即丢；组织审查要算「并行写域重叠」，
+          // 所以随 budget 袋子落到 NodeRecord 上（bag 是既有扩展位，不新增字段）。
+          writeScopes: (raw.writeScopes ?? []).map((item) => String(item)),
         },
       });
     }

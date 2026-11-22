@@ -105,6 +105,42 @@ export function buildTools(service                  )                   {
       execute: (args) => service.graphCommit(args ?? {}),
     },
     {
+      name: named('graph_replan'),
+      description:
+        '重规划（**唯一会改图的协调动作**）：单事务增删节点 / 改依赖 + 递增 `graph_version` + 写 `graph_replanned` 事件。' +
+        '`expectedGraphVersion` **必填**：这是 CAS——先读 `graph_status.graph_version` 再带同一个值，' +
+        '旧组织审查结果不得覆盖新图；版本不符返回 `replan_stale_graph` 并给出 `actualGraphVersion`。' +
+        '终态（done/accepted）节点不得删除或改依赖：要修订就新增修订节点，不改写历史。' +
+        '校验在事务前完成：自依赖 / 悬空依赖 / 成环 / 半途落图一律拒绝，失败零写入。' +
+        '语义裁决不走这里——技术契约矛盾交给临时协调/审计节点，价值取舍交给人。',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: {
+            type: 'string',
+            description: 'gate_failed | evidence_insufficient | scope_change | decision_override | failure_retry | coordination',
+          },
+          expectedGraphVersion: { type: 'number', description: '当前 graph_version（CAS 前置，必填）' },
+          add: {
+            type: 'array',
+            description: '新增节点：{nodeId,title,spec,capability?,stage?,deps?,evidenceRequired?,verifierIds?,writeScopes?,budget?}',
+            items: { type: 'object', additionalProperties: true },
+          },
+          remove: { type: 'array', description: '删除节点 ID（不得为终态）', items: { type: 'string' } },
+          setDeps: {
+            type: 'object',
+            additionalProperties: true,
+            description: '改依赖：{nodeId: [depId...]}；删节点时其下游必须同时在这里改掉，否则按悬空依赖拒绝',
+          },
+          note: { type: 'string', description: '为什么要改（写进事件，供回放）' },
+        },
+        required: ['expectedGraphVersion'],
+        additionalProperties: false,
+      },
+      output,
+      execute: (args, exec) => service.graphReplan(args ?? {}, exec.agent),
+    },
+    {
       name: named('neighbor_digest'),
       description:
         '邻域摘要（**只读，不参与任何判定**）：返回**已完成**节点的定长摘要，两个方向——' +
@@ -165,6 +201,25 @@ export function buildTools(service                  )                   {
       },
       output,
       execute: (args) => service.qualityReport(args ?? {}),
+    },
+    {
+      name: named('organization_review'),
+      description:
+        '组织审查（**只读**：不派活、不改图、不裁决）。协调闭环第 0 阶段——把冲突/集成契约/写域重叠公开成报告。' +
+        '返回：`organization.contracts`（集成契约状态与缺失成员）、`conflicts`（含 byRoute / 能力缺口 / 需人裁决项）、' +
+        '`signals`（发现：集成契约 / 冲突路由 / 能力缺口 / 写域重叠 / 需人裁决）、`proposals`（**草案**，' +
+        '`replanDraft` 刻意不含 `expectedGraphVersion`，采纳者必须自己带）、`next`。' +
+        '`fingerprint` 只由 state 决定：同一 journal 重放出同一值，除 `generatedAt` 外逐字可比。' +
+        '想改图必须显式走 `graph_replan`；`signals` 是发现，不等于冲突已裁决。',
+      parameters: {
+        type: 'object',
+        properties: {
+          generatedAt: { type: 'string', description: '可选：注入生成时刻（测试/重放用），不影响 fingerprint' },
+        },
+        additionalProperties: false,
+      },
+      output,
+      execute: (args) => service.organizationReview(args ?? {}),
     },
     {
       name: named('env_check'),
@@ -234,7 +289,7 @@ export function buildTools(service                  )                   {
     },
     {
       name: named('dispatch'),
-      description: '查看派活候选与容量。传 mode 可切换定时规划。只生成计划；传 enqueue:true 才按候选真正派发 worker（worker 自己 claim）。',
+      description: '查看派活候选与容量。传 mode 可切换定时规划；默认只生成计划，enqueue:true 才真正派发 worker（worker 自己 claim）。',
       parameters: {
         type: 'object',
         properties: {
@@ -243,8 +298,8 @@ export function buildTools(service                  )                   {
           maxPerTick: { type: 'number', description: '单轮最多派几个（1–32）' },
           dryRun: { type: 'boolean', description: '默认 true。false 按正式派活口径列出候选，但仍只生成计划。' },
           enqueue: { type: 'boolean', description: 'true=按候选真正 spawn worker（需活 caller；插件不代领节点）' },
-          role: { type: 'string', description: 'enqueue 时统一使用的职务码（缺省取节点 capability，非法则回退 CODE）' },
-          capability: { type: 'string', description: 'enqueue 时写给 worker 的能力包' },
+          role: { type: 'string', description: 'enqueue 时的执行载体职务；省略时，节点 capability 若与 ROLE_PROFILES 职务同名则沿用，否则默认 CODE。' },
+          capability: { type: 'string', description: '附加给 worker 的能力包；缺省时自由 capability 标签会从节点继承；若显式 role 覆盖节点职务，原节点职务也会保留为能力提示。' },
           maxEnqueue: { type: 'number', description: '本次最多派几个（缺省=候选数）' },
         },
         additionalProperties: false,
@@ -254,10 +309,12 @@ export function buildTools(service                  )                   {
     },
     {
       name: named('task_next'),
-      description: '取下一个可执行节点（ready 由 core 门控），可按职务过滤。',
+      description: '取下一个可执行节点（ready 由 core 门控），返回首个符合可选职务筛选的候选。',
       parameters: {
         type: 'object',
-        properties: { role: { type: 'string', description: '职务码，如 CODE / AUDIT_CODE' } },
+        properties: {
+          role: { type: 'string', description: '可选 ROLE_PROFILES 执行职务筛选：只匹配同名职务 capability；自由 capability 标签或未设 capability 的节点对所有 worker 可见。' },
+        },
         additionalProperties: false,
       },
       output,

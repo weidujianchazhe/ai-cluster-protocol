@@ -26,7 +26,10 @@ export interface RoleProfile {
  * `task_heartbeat` 是 P0-3 铺垫的续租工具（见下方 TASK_HEARTBEAT_CONTRACT）：
  * 仅允许以当前租约的 nodeId + fencingToken 调用；Lead 接线 tools.ts/service.ts 注册该工具后生效。
  */
-const BASE_TOOLS = ['graph_status', 'task_next', 'task_claim', 'task_heartbeat', 'evidence_submit', 'pass_gate', 'verify_done', 'team_status', 'memory_load', 'memory_writeback'];
+// 注意 `organization_review` 在 BASE_TOOLS 里：它是**只读**的，worker 遇到
+// 「我的写域好像和别人的重叠」时可以自己查一次，不必上报等 Lead 转述。
+// `graph_replan` **故意不在**：改图是协调动作，不发给每个 worker（那会变成人人可单方面改图）。
+const BASE_TOOLS = ['graph_status', 'organization_review', 'neighbor_digest', 'task_next', 'task_claim', 'task_heartbeat', 'evidence_submit', 'pass_gate', 'verify_done', 'team_status', 'memory_load', 'memory_writeback'];
 
 export const ROLE_PROFILES: Record<string, RoleProfile> = {
   CODE: {

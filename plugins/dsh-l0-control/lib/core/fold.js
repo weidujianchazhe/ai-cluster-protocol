@@ -286,6 +286,10 @@ export function foldEvents(events               )        {
           graph_version: version,
           added: arrString(p.added),
           removed: arrString(p.removed),
+          rewired: Array.isArray(p.rewired) ? p.rewired.map((row) => {
+            const item = row                           ;
+            return { node_id: str(item.node_id ?? item.nodeId), from: arrString(item.from), to: arrString(item.to) };
+          }) : [],
           note: p.note === undefined || p.note === null ? null : str(p.note),
         };
         state.replanEvents.push(record);

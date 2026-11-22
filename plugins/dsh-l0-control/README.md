@@ -4,7 +4,7 @@
 > 项目级说明（是什么、架构、协作结构、性能、数据落点、成本）在**仓库根 README**。
 > **按功能模块展开的细节在仓库根的 [`docs/`](../../docs/README.md)**——状态与日志、派发与闸门、租约、证据与审计、协调器、容量、存储、工具、测试，各一篇。
 
-一个 `l0control` 服务 + **29 个工具**，复用宿主原生面（`agentTeams` / `subagents` / `sessionController` / `tools`）。
+一个 `l0control` 服务 + **31 个工具**，复用宿主原生面（`agentTeams` / `subagents` / `sessionController` / `tools`）。
 
 ## 目录
 
@@ -14,7 +14,7 @@ src/
   config.ts       配置（schemastery 优先）
   capabilities.ts 工具面 → native / projection / self-built 分级 + 质量声明
   service.ts      l0control 服务（参数校验 / caller 取用 / journal / core 委派 / 环境体检）
-  tools.ts        29 个工具定义
+  tools.ts        31 个工具定义
   core/           图 / ready / 证据 / 完成凭证 / 决策 / 租约 / 组成因子校验 / 准入 / 预算 / 检查点
   dispatch/       派发循环（闸门优先级链、退避、队列、速率、派发视图）
   state/          canonical journal / 快照 / CAS / 恢复
@@ -60,7 +60,7 @@ node scripts/typecheck.mjs   # tsc --noEmit -p tsconfig.typecheck.json
 - **`stale`**：语义真的不同（改了源码没 build）→ **退出 1**
 - **`format-drift`**：去掉空白后完全一致，只差排版（通常是 Node 版本不同）→ **不判失败**，但会打印出来
 
-**验证一个包是否完整，看 `npm run verify` 能不能过（57 步），不要看 `--check`。**
+**验证一个包是否完整，看 `npm run verify` 能不能过（62 步），不要看 `--check`。**
 
 要求 Node **>= 22.6.0**（`stripTypeScriptTypes` 自该版本起提供），已在 `package.json` 的 `engines` 声明。
 
@@ -106,7 +106,7 @@ set_bundle      target=@local/dsh-l0-control enabled=false|true
 
 验收点：`install_bundle → application: applied`；配置出现在 schema 清单里；工具可见；disable 后工具消失、journal 不再增长（append-only 文件保留）。
 
-## 工具面（29）
+## 工具面（31）
 
 **开工前**
 
@@ -124,6 +124,14 @@ set_bundle      target=@local/dsh-l0-control enabled=false|true
 | `graph_status` | 读图状态：journal 摘要、快照、能力摘要、宿主服务视图、存储视图、节点最小投影（分页） |
 | `graph_export` | 导出人读投影（能力清单 / 状态文件） |
 | `graph_checkpoint` / `graph_recover` / `graph_resume_plan` | 分区检查点 / 恢复报告 / 恢复计划（recover-once、skip-completed） |
+| `graph_replan` | **唯一改图的协调动作**：单事务增删节点/改依赖 + 递增 `graph_version`；`expectedGraphVersion` 必填做 CAS（版本不符 → `replan_stale_graph`，零写入）；终态不可删 |
+
+**只读观测与组织协调**
+
+| 工具 | 作用 |
+|---|---|
+| `organization_review` | 组织审查（**只读**）：集成契约状态、冲突路由、写域重叠、协调草案；`fingerprint` 同一 journal 可回放；不派活、不改图、不裁决 |
+| `quality_report` / `collaboration_map` / `neighbor_digest` | 过程质量 / 谁读了谁（含 `delta`）/ 同分区邻域摘要——都只读、都不参与判定 |
 
 **派活与租约**
 

@@ -182,6 +182,13 @@ done（必须铸出 done 凭证才能进；终态不可退出）
 3. **身份与权限分离**。`fencing_token` 是能力凭证，不绑身份。
 4. **审计结构性独立**。`producer ≠ auditor`，且审计职务有白名单。
 
+**组织能力在图内按需生长，不设常驻经理 Agent：**
+
+- 组成因子声明组织意图（`coordination.organization.integrationContracts`：哪些节点完成后必须做跨节点集成、按什么验收）；不声明就不插入协调节点。
+- `organization_review` 只读地把冲突、契约状态、写域重叠投影成报告，附 `fingerprint`（同一 journal 重放出同一值）；**发现 ≠ 裁决 ≠ 重规划**。
+- 冲突只出**草案**（`proposals`），采纳必须显式 `graph_replan` 并带 `expectedGraphVersion` 做 CAS——旧草案不得覆盖新图，版本不符直接 `replan_stale_graph` 且零写入。
+- 语义裁决不下放给协调器：技术契约矛盾交临时协调/审计节点，价值取舍交给人；没有承接能力时是 `capability-gap`，**不静默回退到 CODE**。
+
 「千」在这五个点上被限制：
 
 | 限制点 | 配置 | 归属 |
@@ -263,7 +270,7 @@ node scripts/build.mjs --check  # 只校验同步性（CI 里跑这个）
 **验收链**：
 
 ```powershell
-npm run verify        # 57 步：契约、状态机、租约、证据、闸门、持久化、e2e、泄漏闸门
+npm run verify        # 62 步：契约、状态机、租约、证据、闸门、持久化、e2e、泄漏闸门
 ```
 
 **分层原则**：`verify` 只断言语义，不断言速度——性能探针（`bench:*`）与规模演练（`sim:cluster`）单独跑，不进验收链。因为把时间断言放进 CI，要么被噪声打红，要么被人调宽松，两种都让这条链失去意义。
@@ -430,7 +437,7 @@ node plugins/dsh-l0-control/tests/e2e/conformance.mjs
 node plugins/dsh-l0-control/tests/e2e/run.mjs
 ```
 
-完整验收链：`npm run verify`（57 步）。性能探针与规模演练**不在验收链里**（`bench:*` / `sim:cluster`）——断言语义，不断言速度。
+完整验收链：`npm run verify`（62 步）。性能探针与规模演练**不在验收链里**（`bench:*` / `sim:cluster`）——断言语义，不断言速度。
 
 ## 按对话启用
 

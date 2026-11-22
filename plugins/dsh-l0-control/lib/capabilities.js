@@ -22,6 +22,11 @@ export const TOOL_SURFACE                               = {
   neighbor_digest: { grade: 'self-built', nativeService: null, note: '只读邻域摘要：同分区已完成的节点（定长截断 + 成本估算），不读盘、不参与判定' },
   collaboration_map: { grade: 'self-built', nativeService: null, note: '只读聚合：谁读了谁 + 有耦合/无耦合的质量对比，不参与判定' },
   quality_report: { grade: 'self-built', nativeService: null, note: '只读聚合过程质量（证据来源 / 返工 / 审计独立性），不写 journal、不参与判定' },
+  organization_review: {
+    grade: 'self-built',
+    nativeService: 'core/organization',
+    note: '只读组织审查：集成契约状态 + 冲突路由 + 写域重叠 + 协调草案；不派活、不改图、不裁决；fingerprint 可回放',
+  },
   env_check: { grade: 'self-built', nativeService: null, note: '开工前环境体检：宿主服务、数据落点与各盘空间、按实测速率推算的规模上限' },
   dispatch: { grade: 'self-built', nativeService: null, note: '派活循环控制：off/interval/resident；默认 off + dryRun，不自动 claim' },
   memory_load: { grade: 'self-built', nativeService: null, note: '按需读取管理区任务卡/STATE/报告，紧凑文本 + 引用，不自动注入' },
@@ -79,6 +84,11 @@ export const TOOL_SURFACE                               = {
   project_init: { grade: 'self-built', nativeService: 'fs+git', note: 'bootstrap：dry-run 默认、marker 幂等、只 git init 不 commit/push、git 缺失 fail-soft' },
   graph_plan: { grade: 'self-built', nativeService: 'core/graphspec', note: '工作图组成因子预览：校验 + errors/warnings/ready，零写入（不套固定模板）' },
   graph_commit: { grade: 'self-built', nativeService: 'core/graphspec', note: '校验通过后落图；同一份图重复提交幂等；校验失败零写入' },
+  graph_replan: {
+    grade: 'self-built',
+    nativeService: 'core/replan',
+    note: '唯一改图协调动作：单事务增删/改依赖 + 递增 graph_version；expectedGraphVersion 必填做 CAS；终态不可删',
+  },
   graph_checkpoint: { grade: 'self-built', nativeService: 'core/checkpoint', note: '为指定分区落检查点：追加 partition_checkpointed 事件、返回 baseSeq；不改节点状态' },
   graph_recover: { grade: 'self-built', nativeService: 'core/checkpoint', note: '恢复报告：最近检查点元数据 + 待重放事件数；实际重放由调用方 foldEvents 完成' },
   graph_resume_plan: {

@@ -123,6 +123,8 @@ export {
   collaborationStatus,
   neighborhoodStatus,
   qualityStatus,
+  organizationStatus,
+  graphReplan,
   reapExpiredLeases,
   rehydrateCore,
   resetCore,
@@ -215,3 +217,11 @@ export type { Conflict, ConflictType, RouteContext } from './conflict.ts';
 
 export { buildClusterState, isStateStale, lastStateSeq, markStateBuilt, renderStateForContext } from './state.ts';
 export type { ClaimEvidence, ClusterState, NextAction, StateClaim } from './state.ts';
+export { organizationReview, routeContextOf } from './organization.ts';
+export type {
+  CoordinationProposal,
+  OrganizationReview,
+  OrganizationSignal,
+  OrganizationSignalKind,
+  SignalOwner,
+} from './organization.ts';

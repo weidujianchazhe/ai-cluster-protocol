@@ -1796,12 +1796,28 @@ export class L0ControlService {
         continue;
       }
       const node = (byId.get(nodeId) ?? {})                           ;
-      const rawRole = String(args.role ?? node.capability ?? 'CODE').toUpperCase();
+      const nodeCapability = String(node.capability ?? '').trim();
+      const nodeCapabilityRole = nodeCapability.toUpperCase();
+      // 实例职务（role）与工作所需能力（capability）分开：
+      // - 节点 capability 是实际 ROLE_PROFILE 职务时，可作为兼容性默认 carrier role；
+      // - 其余 capability（包括 RESEARCH/DELIVER 这类权限标签、以及自由字符串）都是工作需求，
+      //   不得回退成 CODE 后丢掉，必须传进 worker 的能力包。
+      const rawRole = String(
+        args.role ?? (LEGAL_WORKER_ROLES.includes(nodeCapabilityRole) ? nodeCapabilityRole : 'CODE'),
+      ).toUpperCase();
       const role = LEGAL_WORKER_ROLES.includes(rawRole) ? rawRole : 'CODE';
+      // 已知 worker 职务若与实际 carrier role 不同（例如显式 role 覆盖），也必须保留为任务能力提示。
+      const nodeCapabilityIsPackage = Boolean(nodeCapability)
+        && (!LEGAL_WORKER_ROLES.includes(nodeCapabilityRole) || nodeCapabilityRole !== role);
+      const capabilityParts = [
+        nodeCapabilityIsPackage ? nodeCapability : '',
+        String(args.capability ?? '').trim(),
+      ].filter(Boolean);
+      const capability = [...new Set(capabilityParts)].join('\n') || undefined;
       const spawned = await this.spawnAgent({
         role,
         task: `${nodeId} · ${String(node.title ?? nodeId)}`,
-        capability: args.capability,
+        capability,
         contextPack: [
           `本 worker 只负责节点 ${nodeId}（stage=${String(node.stage ?? 'unspecified')}）。`,
           '容量与预算由 task_claim 的准入判定；被拒（graph_capacity / partition_capacity / rate_limited / budget_exceeded）时停止，不要重试同一节点。',
@@ -4026,6 +4042,89 @@ export class L0ControlService {
       return { ...(result                           ), persistence: await this.persist() };
     } catch (error) {
       return { ok: false, error: String((error         )?.message ?? error) };
+    }
+  }
+
+  /**
+   * 组织审查（工具 `organization_review`）：**只读**——不派活、不改图、不裁决。
+   *
+   * 这是协调闭环的第 0 阶段：把已有的 conflict / cluster-state 投影公开成「能发现、
+   * 能形成待办、能回放」的报告。同一 journal 重放出同一 `fingerprint`（`generatedAt` 除外）。
+   * 想改图必须显式走 `graph_replan`，且要带上当前 `graph_version`。
+   */
+  async organizationReview(input                           = {})                                   {
+    try {
+      const result = await this.withCore('organization_review', (core) => {
+        const fn = (core                                                    ).organizationStatus;
+        return typeof fn === 'function'
+          ? fn({ generatedAt: input?.generatedAt })
+          : { ok: false, error: 'organization-unavailable', hint: 'core 未实现 organizationStatus' };
+      });
+      return { ...(result                           ), persistence: await this.persist() };
+    } catch (error) {
+      return { ok: false, error: String((error         )?.message ?? error) };
+    }
+  }
+
+  /**
+   * 重规划（工具 `graph_replan`）：协调闭环里**唯一会改图**的动作。
+   *
+   * 三条硬约束（都写进参数/返回，不靠调用方自觉）：
+   *   1. `expectedGraphVersion` 必填 → 旧组织审查结果不得覆盖新图（`replan_stale_graph`）；
+   *   2. 终态保护在 core 里前置拒绝，不提供绕过参数；
+   *   3. 每次成功/失败都在服务 journal 留 `actor` —— 记「谁、基于什么版本、改了什么」，
+   *      因为 core 的 `graph_replanned` 只记图变更本身，不记执行者。
+   */
+  async graphReplan(
+    input   
+                      
+                                    
+                      
+                        
+                                         
+                           
+      = {},
+    caller      ,
+  )                                   {
+    const actor = this.callerInstance(caller) ?? (caller?.id ? String(caller.id) : null);
+    const expected = Number(input?.expectedGraphVersion);
+    if (!Number.isFinite(expected)) {
+      this.appendJournal('graph_replan_rejected', { actor, reason: input?.reason ?? null, error: 'expected-graph-version-required' });
+      return {
+        ok: false,
+        error: 'expected-graph-version-required',
+        hint: '先读 graph_status 的 graph_version，再带同一个值提交；这是防止用过期协调结果覆盖新图的 CAS。',
+      };
+    }
+    try {
+      const result = await this.withCore('graph_replan', (core) => {
+        const fn = (core                                             ).graphReplan;
+        return typeof fn === 'function'
+          ? fn({
+              reason: String(input?.reason ?? 'coordination'),
+              expectedGraphVersion: expected,
+              add: input?.add ?? [],
+              remove: (input?.remove ?? []).map(String),
+              setDeps: input?.setDeps ?? {},
+              note: input?.note ?? null,
+            })
+          : { ok: false, error: 'replan-unavailable', hint: 'core 未实现 graphReplan' };
+      });
+      const row = result                                                                                                                         ;
+      const ok = row?.ok === true;
+      this.appendJournal(ok ? 'graph_replanned_by' : 'graph_replan_rejected', {
+        actor,
+        reason: String(input?.reason ?? 'coordination'),
+        expectedGraphVersion: expected,
+        graph_version: row?.graph_version ?? null,
+        added: Array.isArray(row?.added) ? row.added : [],
+        removed: Array.isArray(row?.removed) ? row.removed : [],
+        rewired: Array.isArray(row?.rewired) ? row.rewired : [],
+        error: ok ? null : (row?.error ?? 'unknown'),
+      });
+      return { ...(result                           ), actor, persistence: await this.persist() };
+    } catch (error) {
+      return { ok: false, error: String((error         )?.message ?? error), actor };
     }
   }
 

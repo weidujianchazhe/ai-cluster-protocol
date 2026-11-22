@@ -9,6 +9,28 @@
  *      `decide`      → ORCH / HUMAN
  *      `reassign`    → ORCH / HUMAN
  *  - `HUMAN` 是操作者（L3 保留口），不应由 Agent 令牌携带（见 `tokens.ts` 的 `allowHuman`）。
+ *
+ * ## ⚠️ 本表**不约束活 Agent** —— 读懂这句能省一天
+ *
+ * 这套系统有**两套并存、互不约束**的机制，看起来像一套，实际不是：
+ *
+ * | 机制 | 位置 | 作用于谁 | 是否硬约束 |
+ * |---|---|---|---|
+ * | **主体权限通道** | `security/actor.ts` 的 `resolveActor` | **活 Agent**（有 `exec.agent.id` 的调用） | 直接给 `['ORCH','HUMAN']` |
+ * | **本表（角色矩阵）** | 这个文件 | **非活 Agent**：`PLUGIN` / `OBS` / `HUMAN` / 内部调用 | 是 |
+ * | **职务描述** | `native/worker.ts` 的 `ROLE_PROFILES` | 拼进 Worker 的 **prompt** | **不是约束**，只是文字 |
+ *
+ * 具体地说：
+ *
+ *  - `native/worker.ts` 的 role（`CODE` / `TEST` / `AUDIT_*` / `OPS` …）**只用于**实例寻址、
+ *    prompt 里的行为建议、以及审计独立性判断；**它不参与 `authorize()` 判定**。
+ *  - 所以**改本表不会限制任何 worker**。想限制 worker，要改的是 `actor.ts` 的分支或工具注册面。
+ *  - 反过来，`TEST` / `EVIDENCE` / `OPS` 三个职务**不在 `ROLES` 里**，如果你写测试直接
+ *    `authorize({ roles: ['TEST'] }, 'task.claim')` 会得到拒绝 —— 但**真实活 Agent 不会走到这里**，
+ *    它在此之前已经被授予 `ORCH`。**别把这种直接调用当成「Worker 无法工作」的证据。**
+ *
+ * 这条边界以前没写清，读代码的人很容易以为"改白名单就能约束 worker"，改完发现不生效。
+ * 一致性由 `tests/verify-role-tool-consistency.mjs` 把关（它会把两套机制的差集显式列出来）。
  */
 
 import { Forbidden, UnknownAction } from "./errors.ts";

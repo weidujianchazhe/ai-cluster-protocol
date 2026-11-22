@@ -10,7 +10,7 @@
  *
  *   1. `ready` 的顺序 == `readySet()` 的顺序（`created_at` → `node_id`）；
  *   2. `task` 是过滤后候选的第一个；
- *   3. `role` 过滤按 capability（大小写不敏感）；没有匹配时 `task === null` 但 `ready` 仍是全集；
+ *   3. `role` 只过滤**真实 worker 职务标签**（大小写不敏感）；自由 capability 标签与未设标签的节点对所有职务开放；无候选时 `task === null` 但 `ready` 仍是全集；
  *   4. 依赖未完成的 `planned` 节点**永远**不出现在 `ready` 里；
  *   5. 调用不改变任何节点状态、不发租约。
  *
@@ -104,4 +104,4 @@ withCoreStore(store, () => {
   }
 });
 
-console.log('PASS task_next 契约：created_at 优先 / 顺序==readySet / role 大小写不敏感 / 无副作用 / 就绪即依赖已 done');
+console.log('PASS task_next 契约：created_at 优先 / 已知职务过滤 / 自由 capability 与空标签开放 / 无副作用 / 就绪即依赖已 done');
