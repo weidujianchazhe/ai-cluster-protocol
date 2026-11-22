@@ -930,7 +930,7 @@ export class L0ControlService {
     return { path: this.journalPath, events, lastKind };
   }
 
-  // ── 9 个工具的实现 ─────────────────────────────────────────
+  // ── 工具实现（工具面清单见 capabilities.ts 的 TOOL_SURFACE）─────────────
   async wishSubmit(input: { text: string; maxParallel?: number; budgetTokens?: number }) {
     if (!input?.text || !String(input.text).trim()) {
       return { ok: false, error: 'wish-text-required' };

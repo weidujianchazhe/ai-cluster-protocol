@@ -13,7 +13,7 @@ export interface SurfaceEntry {
   note: string;
 }
 
-/** 9 个工具 → 底层依赖与分级。 */
+/** 工具面 → 底层依赖与分级（条目数即 `CAPABILITIES.toolCount`，不要另写一份数字）。 */
 export const TOOL_SURFACE: Record<string, SurfaceEntry> = {
   wish_submit: { grade: 'self-built', nativeService: null, note: '愿望 → 图（N3 core 决策；插件只做入口与参数校验）' },
   graph_status: { grade: 'self-built', nativeService: null, note: '读 journal/快照投影 + 组成因子巡检，不触碰宿主会话' },

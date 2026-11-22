@@ -106,8 +106,16 @@ console.log('=== ③ docs 索引一致性 ===');
 const docsDir = path.join(root, 'docs');
 const docFiles = fs.readdirSync(docsDir).filter((f) => f.endsWith('.md') && f !== 'README.md');
 const indexText = fs.readFileSync(path.join(docsDir, 'README.md'), 'utf8');
-const indexed = [...indexText.matchAll(/\]\((\d{2}-[^)]+\.md)\)/g)].map((m) => m[1]);
-const notIndexed = docFiles.filter((f) => f !== 'README.md' && !indexed.includes(f));
+/**
+ * 索引里指的是「docs 目录内、同级的 .md」，前缀**不写死**：
+ * 正文是 `01-`…`14-`（递归），附录是 `A1-`/`A2-`（不占正文编号）。
+ * 早先这里只匹配 `\d{2}-`，于是任何采用别的编号体系（附录、AD）都会被判成「存在但未进索引」——
+ * 那是把「命名风格」检查混进了「完整性」检查。现在只认「同级 .md」，风格由索引本身表达。
+ */
+const indexed = [...indexText.matchAll(/\]\(([A-Za-z0-9][^)/\\]*\.md)\)/g)]
+  .map((m) => m[1])
+  .filter((f) => f !== 'README.md');
+const notIndexed = docFiles.filter((f) => !indexed.includes(f));
 const dangling = indexed.filter((f) => !docFiles.includes(f) && !fs.existsSync(path.join(docsDir, f)));
 console.log(`  docs 文件 ${docFiles.length} 篇 / 索引引用 ${indexed.length} 条`);
 for (const f of notIndexed) bad(`docs/${f} 存在但未进索引`);

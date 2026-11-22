@@ -2,7 +2,7 @@
 
 > 本文件只写**这个插件内部**：目录、构建、工具面、宿主依赖、硬约束。
 > 项目级说明（是什么、架构、协作结构、性能、数据落点、成本）在**仓库根 README**。
-> **按功能模块展开的细节在仓库根的 [`docs/`](../../docs/README.md)**——状态与日志、派发与闸门、租约、证据与审计、协调器、容量、存储、工具、测试，各一篇。
+> **按功能模块展开的细节在仓库根的 [`docs/`](../../docs/README.md)**——正文 `01`–`14` 递归编号（状态与日志、派发与闸门、租约、证据与审计、协调器、容量、存储、工具、测试、质量、协作图、编排感知、为什么做这个、组织因子），另有附录 `A1`（MoE 猜想）与 `A2`（已知问题台账）不占正文编号。
 
 一个 `l0control` 服务 + **31 个工具**，复用宿主原生面（`agentTeams` / `subagents` / `sessionController` / `tools`）。
 
@@ -15,7 +15,7 @@ src/
   capabilities.ts 工具面 → native / projection / self-built 分级 + 质量声明
   service.ts      l0control 服务（参数校验 / caller 取用 / journal / core 委派 / 环境体检）
   tools.ts        31 个工具定义
-  core/           图 / ready / 证据 / 完成凭证 / 决策 / 租约 / 组成因子校验 / 准入 / 预算 / 检查点
+  core/           图 / ready / 证据 / 完成凭证 / 决策 / 租约 / 组成因子校验 / 组织审查 / 重规划 / 准入 / 预算 / 检查点
   dispatch/       派发循环（闸门优先级链、退避、队列、速率、派发视图）
   state/          canonical journal / 快照 / CAS / 恢复
   native/         子 Agent 组装（team / activation / provider）、worker 契约、失败分类
@@ -170,5 +170,6 @@ set_bundle      target=@local/dsh-l0-control enabled=false|true
 - `agentTeams` / `subagents` 的每个方法都要**活 Agent** 作 caller；工具入口取 `exec.agent`，缺失即 `caller-required` fail-closed。
 - `src/core` 缺失时所有图操作返回 `core-unavailable`（不假装成功）。
 - 不 fork 宿主、不替代宿主协议、不写第二份状态。
-- **状态迁移只有一条入口**（`setStatus`）；建成第二条路，两条必然漂移。
+- **状态迁移只有一条入口**（`setStatus`），**改图只有一条入口**（`graph_replan`）；建成第二条路，两条必然漂移。
+- **授权必须显式登记**。`ACTION_BY_TOOL` 未登记的动作会落到默认 `graph.read`——所以 `graph_replan` 必须写在表里成为 `graph.write`，否则只读角色也能改图。
 - `stateDir` 相对 `workspaceRoot` 解析；**测试传 stateDir 必须用绝对路径**，否则会被重解释、清理钩子删不到（本仓库曾因此攒下 611 个残留目录）。
