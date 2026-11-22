@@ -60,7 +60,7 @@ node scripts/typecheck.mjs   # tsc --noEmit -p tsconfig.typecheck.json
 - **`stale`**：语义真的不同（改了源码没 build）→ **退出 1**
 - **`format-drift`**：去掉空白后完全一致，只差排版（通常是 Node 版本不同）→ **不判失败**，但会打印出来
 
-**验证一个包是否完整，看 `npm run verify` 能不能过（62 步），不要看 `--check`。**
+**验证一个包是否完整，看 `npm run verify` 能不能过（63 步），不要看 `--check`。**
 
 要求 Node **>= 22.6.0**（`stripTypeScriptTypes` 自该版本起提供），已在 `package.json` 的 `engines` 声明。
 

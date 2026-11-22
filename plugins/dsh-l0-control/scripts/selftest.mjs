@@ -63,9 +63,13 @@ const ctx = {
 const mod = await import(pathToFileURL(path.join(root, 'lib', 'index.js')).href);
 const handle = mod.apply(ctx, { workspaceRoot, stateDir: '.l0-control-selftest' });
 
-check('apply: 注册 29 个工具（含 env_check / agent_reap / memory_load / memory_writeback / dispatch / task_heartbeat / graph_checkpoint / graph_recover / graph_resume_plan）', () => ({
+// 工具数**不写死**：以 CAPABILITIES.toolCount（= TOOL_SURFACE 条目数）为唯一事实源。
+// 写死过一次 29，加工具后 selftest 静默失真——它当时还不在 verify 链里，没人发现。
+const EXPECTED_TOOLS = mod.CAPABILITIES.toolCount;
+
+check(`apply: 注册 ${EXPECTED_TOOLS} 个工具（含 env_check / agent_reap / memory_load / memory_writeback / dispatch / task_heartbeat / graph_checkpoint / graph_recover / graph_resume_plan / organization_review / graph_replan）`, () => ({
   ok:
-    registered.length === 29 &&
+    registered.length === EXPECTED_TOOLS &&
     registered.includes('project_init') &&
     registered.includes('graph_plan') &&
     registered.includes('graph_commit') &&
@@ -80,7 +84,7 @@ check('apply: 注册 29 个工具（含 env_check / agent_reap / memory_load / m
 }));
 
 check('apply: 注册 l0control 服务', () => ({
-  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === 29,
+  ok: Boolean(provided.l0control) && provided.l0control.describe().toolCount === EXPECTED_TOOLS,
   detail: { describe: provided.l0control?.describe?.().toolCount ?? null },
 }));
 
@@ -146,13 +150,13 @@ check('export: 真写 capabilities.json / STATE.md', async () => {
   };
 });
 
-check('capabilities: native 分级覆盖 29 工具', () => {
+check(`capabilities: native 分级覆盖 ${mod.CAPABILITIES.toolCount} 工具`, () => {
   const grades = mod.CAPABILITIES.tools;
   const keys = Object.keys(grades);
   const nativeTools = keys.filter((key) => grades[key].grade === 'native');
   return {
     ok:
-      keys.length === 29 &&
+      keys.length === EXPECTED_TOOLS &&
       nativeTools.includes('team_status') &&
       grades.team_status.nativeService === 'agentTeams' &&
       grades.project_init.grade === 'self-built' &&
@@ -1131,7 +1135,7 @@ check('ui-server: POST /ui/project-init（preview 零写入 / 创建落位 / man
 });
 
 // 7. 工具输出契约夹具
-check('contract: 9 工具输出形状 + 投影硬化', () => {
+check('contract: 工具输出形状 + 投影硬化（抽查代表性工具）', () => {
   try {
     const out = execFileSync(process.execPath, [path.join(root, 'scripts', 'contract.mjs')], {
       cwd: root,

@@ -277,7 +277,7 @@ node scripts/build.mjs --check  # 只校验同步性（CI 里跑这个）
 **验收链**：
 
 ```powershell
-npm run verify        # 62 步：契约、状态机、租约、证据、闸门、持久化、e2e、泄漏闸门
+npm run verify        # 63 步：契约、状态机、租约、证据、闸门、持久化、e2e、泄漏闸门
 ```
 
 **分层原则**：`verify` 只断言语义，不断言速度——性能探针（`bench:*`）与规模演练（`sim:cluster`）单独跑，不进验收链。因为把时间断言放进 CI，要么被噪声打红，要么被人调宽松，两种都让这条链失去意义。
@@ -444,7 +444,7 @@ node plugins/dsh-l0-control/tests/e2e/conformance.mjs
 node plugins/dsh-l0-control/tests/e2e/run.mjs
 ```
 
-完整验收链：`npm run verify`（62 步）。性能探针与规模演练**不在验收链里**（`bench:*` / `sim:cluster`）——断言语义，不断言速度。
+完整验收链：`npm run verify`（63 步）。性能探针与规模演练**不在验收链里**（`bench:*` / `sim:cluster`）——断言语义，不断言速度。
 
 ## 按对话启用
 

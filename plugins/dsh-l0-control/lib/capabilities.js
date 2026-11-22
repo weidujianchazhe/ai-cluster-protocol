@@ -134,7 +134,7 @@ export const QUALITY = Object.freeze({
 
 export const CAPABILITIES = Object.freeze({
   plugin: 'dsh-l0-control',
-  contractVersion: '0.2.0',
+  contractVersion: '0.2.1',
   backend: 'dsh-host-plugin',
   toolCount: Object.keys(TOOL_SURFACE).length,
   tools: TOOL_SURFACE,
