@@ -304,6 +304,12 @@ export function apply(ctx: any, rawConfig: unknown = {}) {
       pool.clusterFor(workspaceRoot ?? service.workspaceRoot),
     getAgents: (workspaceRoot?: string) =>
       pool.get(workspaceRoot ?? service.workspaceRoot).buildAgentRoster(),
+    // 子智能体树：数据源是宿主 subagents.listDescendants（含非本插件派的子会话），活动优先排序
+    getSubagents: (sessionId: string, options?: { limit?: number; sort?: string }) =>
+      pool.get(service.workspaceRoot).listSubagentTree(sessionId, options ?? {}),
+    // 让面板那个开关驱动宿主 agentTeams.setEnabled，做到「一个开关，两边一致」
+    setTeamMode: (input: { sessionId: string; enabled: boolean }) =>
+      pool.get(service.workspaceRoot).setTeamMode(input),
     onRejectedOrigin: (info: { origin: string; path: string; method: string }) =>
       service.appendJournal('ui_origin_rejected', info),
     enableCluster: (input: { workspaceRoot?: string; sessionId?: string }) =>

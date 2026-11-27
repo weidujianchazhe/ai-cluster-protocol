@@ -94,7 +94,7 @@ window.__ModuleLoader__.load({
      * 超时/中断必须换成能定位的文字——原样抛 AbortError 时，界面上只会显示
      * `signal is aborted without reason`，既看不出是哪个地址、也看不出等了多久。
      */
-    const request = async (base, path, init = {}, timeoutMs = 8000) => {
+    const request = async (base, path, init = {}, timeoutMs = 90000) => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), timeoutMs);
       const started = Date.now();
@@ -619,6 +619,152 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ── 集群拓扑：把「谁在谁的下面、谁在干活」画成树，而不是一堆平铺的行 ──
+    // 数据源：/ui/subagents（宿主 subagents.listDescendants 全量，后端已按 running 优先排过）。
+    // 渲染用缩进 + 连接线，不用 SVG：几百个节点时 SVG 反而更难读，且这里要能折叠。
+    function TopologyView({ sessionId, onOpenSession }) {
+      const [tree, setTree] = React.useState(null);
+      const [err, setErr] = React.useState(null);
+      const [collapsed, setCollapsed] = React.useState(() => new Set(['group:idle']));
+      React.useEffect(() => {
+        if (!sessionId) return undefined;
+        let alive = true;
+        const tick = () => {
+          // 注意：getJson 已经返回**解析好的 JSON**，这里不要再 `.json()`（那样会 TypeError 被 catch 吞掉，界面永远是"读取中"）
+          getJson(`/ui/subagents?sessionId=${encodeURIComponent(sessionId)}&limit=0`)
+            .then((json) => {
+              if (!alive) return;
+              if (json?.ok) { setTree(json); setErr(null); }
+              else setErr(String(json?.error || json?.hint || 'subagents-failed'));
+            })
+            .catch((e) => { if (alive) setErr(String(e && e.message ? e.message : e)); });
+        };
+        tick();
+        const timer = setInterval(tick, 10000);
+        return () => { alive = false; clearInterval(timer); };
+      }, [sessionId]);
+      if (!sessionId) return h(Empty, { text: "先选中一个对话" });
+      if (!tree) {
+        return h("div", { style: muted },
+          err
+            ? `读不到子智能体树：${err}（点这里重试）`
+            : "读取子智能体树…（宿主 listDescendants 首次要 15s 左右）");
+      }
+      const items = Array.isArray(tree.items) ? tree.items : [];
+      const byParent = new Map();
+      const rootIds = [];
+      for (const it of items) {
+        const pid = it.parentSessionId ? String(it.parentSessionId) : null;
+        if (!pid) { rootIds.push(String(it.sessionId)); continue; }
+        if (!byParent.has(pid)) byParent.set(pid, []);
+        byParent.get(pid).push(it);
+      }
+      const runningOf = (list) => list.filter((x) => x.activity === "running").length;
+      // 同一层里：在跑的排前面，其余按 label（后端已排过，这里再稳一次）
+      const sortSiblings = (list) => [...list].sort((a, b) => {
+        const ra = a.activity === "running" ? 0 : 1;
+        const rb = b.activity === "running" ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        return String(a.label || a.sessionId).localeCompare(String(b.label || b.sessionId));
+      });
+      const toggle = (id) => setCollapsed((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+      const maxDepth = items.reduce((m, x) => Math.max(m, Number(x.depth) || 0), 0);
+      /**
+       * **全是同级时不要画树**：实测这 210 个子会话全是 depth=1（root 直接拉起来的），
+       * 树在这种形状下退化成"一竖排前缀"，对"哪个在干活"没有任何帮助。
+       * 所以按数据形状自适应：有层级 → 树；没层级 → 分组（在跑 / 空闲 / 外部）。
+       */
+      if (maxDepth <= 1) {
+        const externalList = items.filter((x) => x.mode === "external");
+        const groups = [
+          { key: "running", label: "在跑", list: items.filter((x) => x.activity === "running") },
+          { key: "idle", label: "空闲", list: items.filter((x) => x.activity !== "running" && x.mode !== "external") },
+          { key: "external", label: "外部", list: externalList },
+        ].filter((g) => g.list.length > 0);
+        const line = (it) => h("div", { key: String(it.sessionId), style: { display: "flex", gap: 6, alignItems: "baseline", fontSize: 12, padding: "1px 0" }, title: String(it.sessionId) },
+          h("span", { style: { ...mono, color: it.activity === "running" ? "#2ea043" : "var(--dsw-alias-label-secondary)", width: 12 } }, it.activity === "running" ? "●" : "○"),
+          h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, String(it.label || it.sessionId)),
+          it.mode === "external" ? h("span", { style: { ...mono, fontSize: 11, color: "var(--dsw-alias-label-secondary)" } }, "外部") : null);
+        return h("div", null,
+          h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 } },
+            h("span", { style: pill }, `共 ${tree.total}`),
+            h("span", { style: { ...pill, color: "#2ea043" } }, `在跑 ${tree.running}`),
+            h("span", { style: pill }, `空闲 ${Math.max(0, tree.total - tree.running - externalList.length)}`),
+            externalList.length ? h("span", { style: pill }, `外部 ${externalList.length}`) : null,
+            h("span", { style: pill }, "全部同级")),
+          h("div", { style: { ...muted, fontSize: 12, marginBottom: 8 } },
+            "这些子智能体都在第 1 层（root 直接拉起），画树会退化成一排，所以按状态分组；" +
+            "点组标题折叠/展开" +
+            (tree.stale ? `。当前是 ${Math.round((tree.cacheAgeMs || 0) / 1000)}s 前的缓存` : "")),
+          groups.map((g) => {
+            const key = "group:" + g.key;
+            const open = !collapsed.has(key);
+            return h("div", { key, style: { marginBottom: 8 } },
+              h("div", {
+                style: { cursor: "pointer", fontWeight: 600, fontSize: 13, padding: "2px 0", display: "flex", gap: 6 },
+                onClick: () => toggle(key),
+              },
+                h("span", { style: { ...mono, width: 12 } }, open ? "▾" : "▸"),
+                h("span", null, g.label),
+                h("span", { style: { ...mono, color: "var(--dsw-alias-label-secondary)", fontSize: 12 } }, `(${g.list.length})`)),
+              open ? h("div", { style: { maxHeight: 300, overflow: "auto", paddingLeft: 18 } }, g.list.map(line)) : null);
+          }));
+      }
+      const rows = [];
+      const walk = (item, depth, prefix) => {
+        const id = String(item.sessionId);
+        const kids = sortSiblings(byParent.get(id) || []);
+        const isCollapsed = collapsed.has(id);
+        const isRun = item.activity === "running";
+        rows.push(h("div", {
+          key: id,
+          style: { display: "flex", gap: 6, alignItems: "baseline", padding: "2px 0", fontSize: 12, cursor: kids.length ? "pointer" : "default" },
+          onClick: kids.length ? () => toggle(id) : (onOpenSession ? () => onOpenSession(id) : undefined),
+          title: id,
+        },
+          h("span", { style: { ...mono, color: "var(--dsw-alias-label-secondary)", whiteSpace: "pre" } }, prefix),
+          h("span", { style: { ...mono, color: isRun ? "#2ea043" : "var(--dsw-alias-label-secondary)", width: 12 } }, isRun ? "●" : "○"),
+          h("span", { style: { fontWeight: isRun ? 600 : 400, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+            String(item.label || id)),
+          kids.length ? h("span", { style: { ...mono, color: "var(--dsw-alias-label-secondary)", fontSize: 11 } },
+            isCollapsed ? `+${kids.length}` : `-${kids.length}`) : null,
+          item.mode === "external" ? h("span", { style: { ...mono, fontSize: 11, color: "var(--dsw-alias-label-secondary)" } }, "外部") : null));
+        if (isCollapsed) return;
+        kids.forEach((kid, i) => {
+          const last = i === kids.length - 1;
+          walk(kid, depth + 1, prefix + (last ? "└─ " : "├─ "));
+        });
+      };
+      sortSiblings(rootIds.map((id) => items.find((x) => String(x.sessionId) === id)).filter(Boolean))
+        .forEach((it) => walk(it, 0, ""));
+      const external = items.filter((x) => x.mode === "external").length;
+      return h("div", null,
+        h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 } },
+          h("span", { style: pill }, `共 ${tree.total}`),
+          h("span", { style: { ...pill, color: "#2ea043" } }, `在跑 ${tree.running}`),
+          h("span", { style: pill }, `空闲 ${Math.max(0, tree.total - tree.running - external)}`),
+          external ? h("span", { style: pill }, `外部 ${external}`) : null,
+          h("span", { style: pill }, `最深层 ${maxDepth}`)),
+        h("div", { style: { ...muted, fontSize: 12, marginBottom: 6 } },
+          "点带子节点的行折叠/展开；树按「在跑优先」排。数据每 10s 刷新" +
+          (tree.stale ? `；当前是 ${Math.round((tree.cacheAgeMs || 0) / 1000)}s 前的缓存` : "")),
+        rows.length ? h("div", { style: { maxHeight: 520, overflow: "auto", paddingRight: 6 } }, rows)
+          : h(Empty, { text: "没有子智能体" }));
+    }
+    // ── 对话区一级 View（tab）：集群 ──
+    // 注册到 `conversation.view`（kind=list / scope=session），用**自己的 id**：
+    // 官方那三个 View（对话/轨迹/统计）是同 slot 的 occupant，新 id 只是并排加一个，不接管。
+    function ClusterView(props) {
+      const sessionId = props?.sessionId || props?.session?.id || null;
+      return h('div', { style: { padding: '16px 20px', height: '100%', overflow: 'auto' } },
+        h('div', { style: { ...sectionTitle, marginBottom: 4 } }, '集群'),
+        h('div', { style: { ...muted, marginBottom: 12 } }, '子智能体拓扑：在跑优先；工作图节点见左侧「AI集群工作协议」面板'),
+        h(TopologyView, { sessionId, onOpenSession: null }));
+    }
     function Panel({ ctx, useWorkspaces, useSessions, session, sessionId: ownSessionId }) {
       const t = (key) => ZH[key] || EN[key] || key;
       const useWs = useWorkspaces || (() => []);
@@ -655,6 +801,8 @@ window.__ModuleLoader__.load({
       const [data, setData] = React.useState(null);
       // 黑板增量 cursor（journal 行数）：初始 null → 首次取最近 40
       const cursorRef = React.useRef(null);
+      /** warming 骨架的重试定时器：避免与常规轮询叠加 */
+      const warmingRetryRef = React.useRef(null);
       const failStreakRef = React.useRef(0);
       const [error, setError] = React.useState(null);
       const [loading, setLoading] = React.useState(true);
@@ -797,6 +945,20 @@ window.__ModuleLoader__.load({
           const qs = params.toString();
           const json = await getJson(qs ? `/ui/snapshot?${qs}` : '/ui/snapshot');
           if (!json || json.ok !== true) throw new Error(json?.error || 'snapshot failed');
+          /**
+           * 服务端已改成 stale-while-revalidate：冷读一次要 13–26s，所以它先返回
+           * `warming: true` 的骨架，并在后台构建。这里见到 warming 就**保留上一次的 data、
+           * 2 秒后重试**，而不是把骨架盖上去（那会让面板闪成空白），也不是等 10s 的常规轮询。
+           */
+          if (json.warming === true) {
+            setLoading(false);
+            if (warmingRetryRef.current) clearTimeout(warmingRetryRef.current);
+            warmingRetryRef.current = setTimeout(() => {
+              warmingRetryRef.current = null;
+              void load();
+            }, Math.max(1000, Number(json.retryAfterMs) || 2000));
+            return;
+          }
           // 黑板增量合并：initial/fallback 直接替换；incremental 只把新行接到前面
           const incoming = Array.isArray(json.blackboard) ? json.blackboard : [];
           const mode = json.blackboardMode || (cursorRef.current === null ? 'initial' : 'incremental');
@@ -876,6 +1038,7 @@ window.__ModuleLoader__.load({
         ['board', t('tabBoard')],
         ['dispatch', t('tabDispatch')],
         ['workspace', t('tabProject')],
+        ['topology', '拓扑'],
       ];
 
       return h('div', { style: page }, h('div', { style: wrap },
@@ -1220,6 +1383,9 @@ window.__ModuleLoader__.load({
                   : null));
         })() : null,
 
+        tab === 'topology' ? h('div', { style: card },
+          h('h2', { style: sectionTitle }, '集群拓扑'),
+          h(TopologyView, { sessionId: liveSessionId, onOpenSession: null })) : null,
         tab === 'workspace' ? h('div', { style: card },
           h('h2', { style: sectionTitle }, t('projectTitle')),
           h('div', { style: muted }, t('projectHint')),
@@ -1331,8 +1497,12 @@ window.__ModuleLoader__.load({
         if (!sessionId) return;
         let alive = true;
         getJson(`/ui/access?sessionId=${encodeURIComponent(sessionId)}`)
-          .then((res) => res.json())
-          .then((json) => { if (alive) setEnabled(json?.enabled === true); })
+          // getJson 已解析：不要再 `.json()`（否则 TypeError 被 catch 吞掉，按钮永远不出现）
+          .then((json) => {
+            if (!alive) return;
+            setEnabled(json?.enabled === true);
+            setSource(json?.source || null);
+          })
           .catch(() => { if (alive) setEnabled(true); });
         return () => { alive = false; };
       }, [sessionId]);
@@ -1360,6 +1530,10 @@ window.__ModuleLoader__.load({
           name: 'sidebar.panellist', id: PANEL_ID, order: 40,
           label: () => 'AI集群工作协议',
         }, Icon));
+        ctx.slots.inject('conversation.view', () => ctx.slots.register({
+          name: 'conversation.view', id: 'l0-cluster', order: 50,
+          label: () => '集群',
+        }, (props) => h(Boundary, null, h(ClusterView, { ...props, ctx }))));
         ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main', key: PANEL_ID,
         }, (props) => h(Boundary, null, h(Panel, { ...props, ctx }))));

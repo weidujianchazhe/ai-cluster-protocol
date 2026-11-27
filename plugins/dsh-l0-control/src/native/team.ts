@@ -12,6 +12,15 @@
  *       本模块不写 core、不写 state，只做"派发 + 回执"。
  */
 
+/**
+ * Team 路径不可用的原因。
+ *   - no-service         宿主没挂 agentTeams
+ *   - host-method-removed 宿主契约里已没有 spawnTeammate / membership（nightly 常见）
+ *   - not-lead           caller 不是 Lead（子会话不能拉 Team member）
+ *   - membership-threw   membership 本身抛错
+ */
+export type TeamPathBlockReason = 'no-service' | 'host-method-removed' | 'not-lead' | 'membership-threw';
+
 export interface NativeCaller {
   id?: string;
 }
@@ -57,6 +66,16 @@ export interface SpawnAgentResult {
   via?: 'spawnTeammate' | 'startActivation';
   memberName?: string | null;
   ownerCapable?: boolean;
+  /**
+   * Team 路径走不了的原因（`null`/缺省 = Team 路径可用或已走通）。
+   *
+   * 有了它，`ownerCapable:false` 才可解释：
+   *   - `host-method-removed` → 宿主 nightly 把 `spawnTeammate` 摘了（契约变更）
+   *   - `no-service`          → 没挂 agentTeams
+   *   - `not-lead`            → 子会话不能拉 Team member
+   *   - `membership-threw`    → 成员身份读取抛错
+   */
+  teamPathBlocked?: TeamPathBlockReason | null;
   /** 自驱模式下，返回注入的 worker prompt 摘要（便于审计"插件没代发"）。 */
   workerPrompt?: { role: string; instanceId: string; tools: string[]; iterations: number } | null;
   /** 失败时的原始细节（宿主返回体/异常对象），只用于排障，不是契约字段。 */
@@ -105,6 +124,8 @@ export interface NativeInstanceRecord {
   parentSessionId: string | null;
   createdAt: string;
   mode: 'activation' | 'teammate';
+  /** Team 路径走不了的原因（见 NativeTeam.teamPathBlocked）。 */
+  teamPathBlocked?: TeamPathBlockReason | null;
 }
 
 /** 统一身份：`role-<role>-<nn>`；兼容大小写与下划线（旧 `ROLE-AUDIT_CODE-02` 也认）。 */
@@ -252,16 +273,31 @@ export class NativeTeam {
     return start;
   }
 
-  /** 尝试走 Team member 路径：caller 必须是 Lead 且 `spawnTeammate` 可用。 */
-  private leadCanSpawnTeammate(caller: NativeCaller | undefined): boolean {
+  /**
+   * Team 路径为什么走不了；`null` = 能走。
+   *
+   * **必须给出原因**：`agent_spawn` 静默退回 activation 时，`ownerCapable:false`
+   * 看起来像"插件自己选的方案"，实际可能是宿主能力消失。2026-11 的 nightly 把
+   * `spawnTeammate` / `membership` 从 `agentTeams` 移除了（只剩
+   * `isEnabled`/`setEnabled`/`createTask`/`getTask`/`listTasks`/`updateTask`），
+   * 于是这类降级从"偶发"变成"每次"。不写原因，用户只会看到能力莫名消失。
+   */
+  private teamPathBlocked(caller: NativeCaller | undefined): TeamPathBlockReason | null {
     const teams = this.agentTeams;
-    if (!teams || typeof teams.spawnTeammate !== 'function') return false;
+    if (!teams) return 'no-service';
+    if (typeof teams.spawnTeammate !== 'function') return 'host-method-removed';
+    if (typeof teams.membership !== 'function') return 'host-method-removed';
     try {
       const membership = teams.membership(caller);
-      return membership?.role === 'lead';
+      return membership?.role === 'lead' ? null : 'not-lead';
     } catch {
-      return false;
+      return 'membership-threw';
     }
+  }
+
+  /** 尝试走 Team member 路径：caller 必须是 Lead 且 `spawnTeammate` 可用。 */
+  private leadCanSpawnTeammate(caller: NativeCaller | undefined): boolean {
+    return this.teamPathBlocked(caller) === null;
   }
 
   /** 已注册 provider 列表（宿主 `subagents.list()`）；注册表不可用时返回 null。 */
@@ -465,6 +501,7 @@ export class NativeTeam {
         return { ok: false, error: 'activation-without-child', role, detail: activation ?? null };
       }
       this.instances.set(instanceId, record);
+      const blocked = this.teamPathBlocked(caller);
       return {
         ok: true,
         via: 'startActivation',
@@ -472,7 +509,20 @@ export class NativeTeam {
         sessionId: record.sessionId,
         messageId: activation?.messageId ?? undefined,
         ownerCapable: false,
-        hint: 'activation 实例不是 Team member，不能作 TeamTask owner；board owner 需用 Lead spawn 的 memberName',
+        /**
+         * 降级原因必须跟着结果一起走：`ownerCapable:false` 本身不解释自己。
+         * `host-method-removed` = 宿主 nightly 已经把 spawnTeammate 摘掉了，
+         * 这种降级跟"Team 满了"完全不是一回事，排障方向也不同。
+         */
+        teamPathBlocked: blocked,
+        hint:
+          blocked === 'host-method-removed'
+            ? '宿主 agentTeams 已没有 spawnTeammate（nightly 契约变更）：本次只能走 activation，实例不能作 TeamTask owner。要用团队板请改用 board_task_* 的投影口径或等宿主补回该方法'
+            : blocked === 'no-service'
+              ? '宿主未挂 agentTeams：本次走 activation，实例不能作 TeamTask owner'
+              : blocked === 'not-lead'
+                ? 'caller 不是 Lead：子会话不能拉 Team member，只能走 activation'
+                : 'activation 实例不是 Team member，不能作 TeamTask owner；board owner 需用 Lead spawn 的 memberName',
         role,
         workerPrompt: this.workerSummary(input, role, instanceId),
       };

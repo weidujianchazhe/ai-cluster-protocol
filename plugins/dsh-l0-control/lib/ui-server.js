@@ -33,6 +33,13 @@ import http from 'node:http';
                                                    
                                                        
                                                   
+     
+                                                                 
+                                                     
+     
+                                                                                                                
+                                                                                   
+                                                                                               
                                             
                                                                                       
                                     
@@ -343,6 +350,31 @@ export function createUiHandler(
       }
       return;
     }
+    // POST /ui/team-mode：写宿主 `agentTeams.isEnabled`（输入框那个开关的宿主侧状态）
+    if (method === 'POST' && path === '/ui/team-mode') {
+      if (typeof options.setTeamMode !== 'function') {
+        send(res, 501, { ok: false, error: 'team-mode-not-wired' });
+        return;
+      }
+      let body      = {};
+      try {
+        body = await readJsonBody(req);
+      } catch (error) {
+        send(res, 400, { ok: false, error: 'bad-json', message: String((error         )?.message ?? error) });
+        return;
+      }
+      const target = String(body?.sessionId ?? sessionId ?? '').trim();
+      if (!target || typeof body?.enabled !== 'boolean') {
+        send(res, 400, { ok: false, error: 'sessionId-and-enabled-required' });
+        return;
+      }
+      try {
+        send(res, 200, await options.setTeamMode({ sessionId: target, enabled: body.enabled }));
+      } catch (error) {
+        send(res, 500, { ok: false, error: 'team-mode-failed', message: String((error         )?.message ?? error) });
+      }
+      return;
+    }
     // POST /ui/project-init：面板建项目（management 轴为 off 时 409，且零写入）
     if (method === 'POST' && path === '/ui/project-init') {
       if (typeof options.projectInit !== 'function') {
@@ -394,6 +426,28 @@ export function createUiHandler(
         send(res, 200, roster ?? { ok: false, error: 'agents-empty' });
       } catch (error) {
         send(res, 500, { ok: false, error: 'agents-failed', message: String((error         )?.message ?? error) });
+      }
+      return;
+    }
+    // GET /ui/subagents：子智能体树（活动优先）。默认只给「在跑 + 总数」，可 limit 截断。
+    if (path === '/ui/subagents') {
+      if (typeof options.getSubagents !== 'function') {
+        send(res, 501, { ok: false, error: 'subagents-not-wired' });
+        return;
+      }
+      if (!sessionId) {
+        send(res, 400, { ok: false, error: 'sessionId-required' });
+        return;
+      }
+      const query = new URLSearchParams(rawUrl.split('?')[1] ?? '');
+      const limitRaw = Number(query.get('limit') ?? '');
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(2000, Math.floor(limitRaw)) : 0;
+      const sort = String(query.get('sort') ?? 'active');
+      try {
+        const tree = await options.getSubagents(String(sessionId), { limit, sort });
+        send(res, 200, tree ?? { ok: false, error: 'subagents-empty' });
+      } catch (error) {
+        send(res, 500, { ok: false, error: 'subagents-failed', message: String((error         )?.message ?? error) });
       }
       return;
     }

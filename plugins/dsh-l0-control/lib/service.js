@@ -247,7 +247,41 @@ function scalar(value         )                                   {
   return null;
 }
 
-function projectTeam(caller     , membership     , members       , tasks       ) {
+/**
+ * 宿主 `agentTeams` 的能力探针。
+ *
+ * **为什么要它**：DSH 是每夜构建（nightly）渠道，宿主服务契约会变。
+ * 2026-11 的更新把 `agentTeams` 从「11 个方法」收成 6 个
+ * （`isEnabled` / `setEnabled` / `createTask` / `getTask` / `listTasks` / `updateTask`），
+ * `membership` / `listMembers` / `spawnTeammate` / `sendMessage` 全部消失。
+ * 旧代码直接 `teams.membership(caller)` → `TypeError` → `projection-failed`，
+ * 把「宿主能力变了」伪装成「插件内部出错」。探针把这两种情况分开。
+ */
+function teamCapabilitiesOf(teams     ) {
+  const has = (name        ) => typeof teams?.[name] === 'function';
+  return {
+    /** 能读调用者在 Team 里的成员身份（旧契约才有） */
+    membership: has('membership'),
+    /** 能列出 Team 成员名单（旧契约才有） */
+    listMembers: has('listMembers'),
+    /** 能起 Team member 子会话（旧契约才有）；缺失时 agent_spawn 只能走 activation */
+    spawnTeammate: has('spawnTeammate'),
+    /** 能给 Team member 投消息（旧契约才有） */
+    sendMessage: has('sendMessage'),
+    /** 能读/写 per-session Team 模式（新契约的核心，UI 那个开关就是它） */
+    teamMode: has('isEnabled') && has('setEnabled'),
+    /** 团队板任务（新旧契约都有） */
+    tasks: has('createTask') && has('listTasks') && has('updateTask'),
+  };
+}
+
+function projectTeam(
+  caller     ,
+  membership     ,
+  members       ,
+  tasks       ,
+  extra                                                                        = {},
+) {
   return {
     ok: true,
     native: true,
@@ -258,6 +292,10 @@ function projectTeam(caller     , membership     , members       , tasks       )
       role: scalar(membership?.role),
       name: scalar(membership?.name),
     },
+    /** 宿主 Team 模式是否开启（对应输入框那个「启用智能体团队协作」开关） */
+    teamMode: extra.teamMode === undefined ? null : extra.teamMode,
+    /** 逐项能力是否可用；缺失项在别的字段上会体现为「空」而不是「报错」 */
+    capabilities: extra.capabilities ?? null,
     memberCount: members.length,
     members: members.map((member     ) => ({
       id: scalar(member?.id),
@@ -1061,10 +1099,54 @@ export class L0ControlService {
     }
   }
 
-  /** guard 只看协作：没有记录 / coordination=false 都算未启用。 */
+  /**
+   * 宿主 Team 模式（输入框那个「启用智能体团队协作」开关的宿主侧状态）。
+   *
+   * `null` = **宿主没有这个能力**（旧契约 / 没挂 agentTeams），调用方应退回本插件自己的记录。
+   * 只传 `{id}` 就够：`agentTeams.isEnabled(caller)` 只用 caller 的 sessionId 去找 root 的选择。
+   */
+  hostTeamMode(sessionId                           )                 {
+    const id = String(sessionId ?? '');
+    if (!id) return null;
+    const teams = this.agentTeams;
+    if (!teams || typeof teams.isEnabled !== 'function') return null;
+    /**
+     * **必须传真 Agent**：`isEnabled` 内部按 caller 的会话身份去找 root 的选择，
+     * 传 `{ id }` 这种假对象会抛错（实测：`teamMode` 直接读成 null）。
+     * 同步路径优先用 `agents.get(id)`（活 Agent 注册表，同步可取），
+     * 回退到最近一次工具调用的 caller（同一 session 时有效）。
+     */
+    const live = (() => {
+      try {
+        return (this.ctx.get?.('agents')       )?.get?.(id) ?? null;
+      } catch {
+        return null;
+      }
+    })();
+    const cached = this.lastCaller && String(this.lastCaller?.id ?? '') === id ? this.lastCaller : null;
+    const caller = live ?? cached;
+    if (!caller) return null;
+    try {
+      const value = teams.isEnabled(caller);
+      return value === true;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * guard 只看协作。**权威来源是宿主那个开关**（如果宿主提供）：
+   * 用户界面上只有一个「启用智能体团队协作」，本插件跟随它，而不是另立一套状态。
+   *
+   * 为什么改成这样：两套开关（宿主 / 插件）必然出现"这边开了那边没开"，
+   * 而用户只能看见其中一个。留一份记录就意味着留一个对不上的可能。
+   * 宿主没有该能力时才退回本地 journal（老部署兼容）。
+   */
   isSessionEnabled(sessionId                           )          {
     const id = String(sessionId ?? '');
     if (!id) return false;
+    const host = this.hostTeamMode(id);
+    if (host !== null) return host;
     const explicit = this.enabledSessions.get(id);
     return explicit ? explicit.coordination === true : this.workspaceCoordinationDefault === true;
   }
@@ -1277,14 +1359,24 @@ export class L0ControlService {
   /** 某个对话的双轴状态（给 UI 侧车 / 面板用）。 */
   accessFor(sessionId                ) {
     const id = sessionId ? String(sessionId) : null;
+    const hostMode = id ? this.hostTeamMode(id) : null;
+    const enabled = id ? this.isSessionEnabled(id) : false;
     return {
       ok: true,
       sessionId: id,
-      coordination: id ? this.isSessionEnabled(id) : false,
-      enabled: id ? this.isSessionEnabled(id) : false,
+      coordination: enabled,
+      enabled,
+      /** 宿主 Team 模式（`null` = 宿主没这个能力，此时 `source` 是 `journal`） */
+      teamMode: hostMode,
+      /** 这个 `enabled` 是从哪儿来的：宿主开关 / 本插件记录 */
+      source: hostMode === null ? ('journal'         ) : ('host'         ),
       management: id ? this.managementFor(id) : ('off'                  ),
       default: 'disabled'         ,
       managementDefault: 'off'         ,
+      hint:
+        hostMode === null
+          ? '宿主没有 agentTeams.isEnabled：协作状态取自本插件记录'
+          : '协作状态跟随宿主「启用智能体团队协作」开关；本插件不另立开关',
     };
   }
 
@@ -1393,7 +1485,24 @@ export class L0ControlService {
    * 定时器里没有 `exec.agent`。只有 Lead 能走 `spawnTeammate`，所以这里只记 Lead。
    * 记不到 Lead 时协调器**只做 reap、不派审计**（不猜、不降级成别的身份乱派）。
    */
+  /**
+   * 首次工具调用时**后台预热**一次快照。
+   * 为什么：冷读一次 snapshot 实测 25.8s（graphStatus 15.1s + 其余 10.5s），
+   * 用户点开面板那一刻才算是纯等。预热把它挪到「插件刚加载、还没人看面板」的空窗里，
+   * 之后 TTL 内都是毫秒级。失败不影响任何工具（纯优化）。
+   */
+          snapshotWarmed = false;
+          warmSnapshotOnce(caller     )       {
+    if (this.snapshotWarmed) return;
+    this.snapshotWarmed = true;
+    const sessionId = caller?.id ? String(caller.id) : undefined;
+    void this.uiSnapshot(sessionId ? { sessionId } : {}).catch(() => {
+      /* 预热失败：下一次真实请求仍然会自己算 */
+    });
+  }
+
   noteCaller(caller     )       {
+    this.warmSnapshotOnce(caller);
     if (!caller?.id) return;
     try {
       const role = this.ctx.get('agentTeams')?.membership?.(caller)?.role;
@@ -2765,14 +2874,91 @@ export class L0ControlService {
   }
 
   /**
+   * 只读 UI 快照（侧车专用）：**stale-while-revalidate**。
+   *
+   * 为什么不再同步等：冷读一次实测 13–26 s（graphStatus 冷启动 15 s + sessions/management 磁盘扫描约 11 s），
+   * 而面板 10 s 轮询、前端 8 s 超时 —— 同步等就是必然报「面板服务未连接」。
+   * 现在：有缓存**立即**返回（附 `cacheAgeMs` / `stale`），过期只在后台重算；
+   * 首次没有缓存时返回骨架 + `warming: true` + `retryAfterMs`，让前端先渲染壳、2 秒后再来。
+   */
+          uiSnapshotCache = new Map                                                        ();
+          uiSnapshotInflight = new Map                                          ();
+
+  async uiSnapshot(input                                                                    = {}) {
+    const cacheKey = JSON.stringify([input?.sessionId ?? null, input?.sinceSeq ?? null, input?.withRecovery === true]);
+    const ttlMs = 15000;
+    const cached = this.uiSnapshotCache.get(cacheKey) ?? null;
+    /**
+     * 显式要完整数据（`withRecovery=1`，例如「调度」页或验收脚本）→ **同步构建**。
+     * 这类调用方要的就是那一刻的完整快照，给它骨架等于骗它；慢是它的选择。
+     * 其余请求走下面的 SWR：立即返回骨架，后台构建。
+     */
+    if (input?.withRecovery === true) {
+      const value = await this.buildSnapshot(input);
+      this.uiSnapshotCache.set(cacheKey, { at: Date.now(), value });
+      return value;
+    }
+    if (cached) {
+      const age = Date.now() - cached.at;
+      if (age >= ttlMs) this.refreshSnapshot(cacheKey, input);
+      return { ...cached.value, cachedAt: cached.at, cacheAgeMs: age, stale: age >= ttlMs, warming: false };
+    }
+    this.refreshSnapshot(cacheKey, input);
+    return {
+      ok: true,
+      warming: true,
+      at: new Date().toISOString(),
+      tenant: this.tenant,
+      sessionId: input?.sessionId ? String(input.sessionId) : null,
+      // 骨架里仍给「快字段」：这些不依赖 journal 重放（毫秒级），面板据此就能渲染壳与派发页
+      access: {
+        default: 'disabled'         ,
+        enabled: input?.sessionId ? this.isSessionEnabled(input.sessionId) : false,
+        coordination: input?.sessionId ? this.isSessionEnabled(input.sessionId) : false,
+        management: input?.sessionId ? this.managementFor(input.sessionId) : ('off'                  ),
+        managementDefault: 'off'         ,
+      },
+      dispatch: (() => {
+        try { return this.dispatchView(); } catch (error) {
+          return { ok: false, error: 'dispatch-view-failed', message: String((error         )?.message ?? error) };
+        }
+      })(),
+      graph: null,
+      team: null,
+      sessions: [],
+      blackboard: [],
+      workspaces: [],
+      management: null,
+      recovery: null,
+      hint: '首次快照正在后台构建（冷读实测 13–26s）；2 秒后自动重试即可拿到完整数据',
+      retryAfterMs: 2000,
+    };
+  }
+
+  /** 后台构建：同一 cacheKey 只允许一个 inflight，避免冷读被并发叠成雪崩。 */
+          refreshSnapshot(cacheKey        , input                                                                   )       {
+    if (this.uiSnapshotInflight.has(cacheKey)) return;
+    const task = this.buildSnapshot(input)
+      .then((value) => {
+        this.uiSnapshotCache.set(cacheKey, { at: Date.now(), value });
+        return value;
+      })
+      .finally(() => { this.uiSnapshotInflight.delete(cacheKey); });
+    this.uiSnapshotInflight.set(cacheKey, task);
+    void task.catch(() => { /* 构建失败：保留旧缓存，下次再来 */ });
+  }
+
+  /**
    * 只读 UI 快照（侧车专用，不参与决策）。
    *
    * **按对话窗口（session）隔离**：`uiSnapshot({sessionId})` 只返回该 session 的团队板；
    * 有 live caller 且 caller.id === sessionId 才走实时投影，否则用该 session 的 `team_snapshot`；
    * 未知 session / 未指定 session 一律 `source='none'`，**不跨 session 复用**。
    */
-  async uiSnapshot(input                                                                    = {}) {
+          async buildSnapshot(input                                                                    = {})                                   {
+    const tStart = Date.now();
     const graphView = await this.graphStatus();
+    const tGraph = Date.now() - tStart;
     const coreGraph = (graphView       )?.graph?.result ?? (graphView       )?.graph ?? null;
     // core 内存态偶尔落后于持久层（例如 graph_commit 后 UI 侧实例未重放）；
     // 显示计数时以 recoveryReport.state 兜底，避免“图已落盘但面板 0 nodes”。
@@ -2958,7 +3144,7 @@ export class L0ControlService {
     } catch (error) {
       descendants = { ok: false, count: 0, source: 'none', capturedAt: null, error: String((error         )?.message ?? error) };
     }
-    return {
+    const snapshotValue                          = {
       ok: true,
       at: new Date().toISOString(),
       tenant: this.tenant,
@@ -3027,6 +3213,8 @@ export class L0ControlService {
       // `withRecovery=1`，其余时候这里是 null——不是"没数据"，是"没问"。
       recovery: input?.withRecovery === true ? await this.safeRecoveryView() : null,
     };
+    try { this.appendJournal('ui_snapshot_timing', { graphMs: tGraph, totalMs: Date.now() - tStart }); } catch { /* 计时失败不影响返回 */ }
+    return snapshotValue;
   }
 
   /** `recoveryView()` 的兜底包装：**观测失败不能把整个快照打成错误**。 */
@@ -3395,11 +3583,28 @@ export class L0ControlService {
       return { ok: false, error: 'agentTeams-absent', hint: '该部署未挂载 Agent Teams 服务' };
     }
     try {
-      const membership = teams.membership(caller);
-      const members = teams.listMembers(caller) ?? [];
-      const tasks = teams.listTasks(caller) ?? [];
+      const capabilities = teamCapabilitiesOf(teams);
+      /**
+       * 缺方法就**退化**，不抛错：
+       *   - `membership` 缺失 → 用 caller 自己造一个最小投影（我们是 Lead，身份不需要问宿主）
+       *   - `listMembers` 缺失 → 空名单 + `capabilities.listMembers=false`（让调用方知道是"读不到"而不是"没有成员"）
+       *   - `isEnabled` 存在就读 Team 模式，读失败给 null（不假装知道）
+       */
+      const membership = capabilities.membership
+        ? teams.membership(caller)
+        : { root: { id: String(caller?.id ?? '') }, id: String(caller?.id ?? ''), role: 'lead', name: null };
+      const members = capabilities.listMembers ? (teams.listMembers(caller) ?? []) : [];
+      const tasks = capabilities.tasks ? (teams.listTasks(caller) ?? []) : [];
+      let teamMode                 = null;
+      if (typeof teams.isEnabled === 'function') {
+        try {
+          teamMode = teams.isEnabled(caller) === true;
+        } catch {
+          teamMode = null; // 读不到就是不知道，不猜
+        }
+      }
       // 先投影成纯标量，再 JSON 兜底；两步任一失败都走 projection-failed
-      const projected = toLossless(projectTeam(caller, membership, members, tasks))                           ;
+      const projected = toLossless(projectTeam(caller, membership, members, tasks, { capabilities, teamMode }))                           ;
       // 同时带出本插件派生的真实子 Agent 实例（native 执行层的登记表）
       const value = {
         ...projected,
@@ -3429,6 +3634,227 @@ export class L0ControlService {
     } catch (error) {
       return { ok: false, error: 'projection-failed', detail: errorInfo(error) };
     }
+  }
+
+  /**
+   * 子智能体树的缓存与去重。
+   *
+   * **为什么必须有**：`subagents.listDescendants(root)` 在 200 个子会话上实测要 **15.6 秒**
+   * （它要扫会话存储），而面板要按"谁在干活"轮询。直接每次调会被慢查询拖死：
+   * 轮询间隔 8s、查询 15s，请求会一直堆积。
+   *
+   * 所以：短 TTL 缓存 + 同一 session 只允许一个 inflight + 读时带超时。
+   * 超时**不抛错**：有旧缓存就给旧缓存并标 `stale`，没缓存就明说还没读到
+   * （返回 `ok:false` + `retryAfterMs`），让面板继续显示上一次的内容而不是空白。
+   */
+          descendantTreeCache = new Map                                                               ();
+          descendantTreeInflight = new Map                                                 ();
+
+          async loadDescendantTree(
+    rootSessionId        ,
+    timeoutMs        ,
+  )                                                                                                                                                         {
+    const subagents = (() => {
+      try {
+        return this.ctx.get?.('subagents')       ;
+      } catch {
+        return null;
+      }
+    })();
+    if (!subagents || typeof subagents.listDescendants !== 'function') {
+      throw new Error('subagents-unavailable');
+    }
+    const cached = this.descendantTreeCache.get(rootSessionId) ?? null;
+    const age = cached ? Date.now() - cached.at : null;
+    /**
+     * TTL 取 30s 而不是 5s：宿主那边一次 `listDescendants` 实测要 **15–18 秒**，
+     * 5s 的 TTL 等于"每次都是冷读"，面板永远在等。
+     * 这里用 stale-while-revalidate：有缓存就先给缓存（标 cacheAgeMs），
+     * 过期只在后台刷新，**同步路径永不阻塞在慢查询上**。
+     */
+    const ttlMs = 30000;
+    if (cached && age !== null) {
+      const fresh = age < ttlMs;
+      if (!fresh) void this.refreshDescendantTree(rootSessionId, subagents);
+      return { items: cached.items, timedOut: false, cachedAt: cached.at, cacheAgeMs: age, backgroundRefresh: !fresh };
+    }
+    // 冷启动：没有缓存只能等，但带超时，超时就明说"还没读到"
+    const inflight = this.ensureDescendantInflight(rootSessionId, subagents);
+    const raced = await Promise.race([
+      inflight.then((items) => ({ items, timedOut: false          })),
+      new Promise                                                           ((resolve) =>
+        setTimeout(() => resolve({ items: [], timedOut: true          }), Math.max(1000, timeoutMs)),
+      ),
+    ]);
+    const now = this.descendantTreeCache.get(rootSessionId) ?? null;
+    const nowAge = now ? Date.now() - now.at : null;
+    return { items: raced.items, timedOut: raced.timedOut, cachedAt: now?.at ?? null, cacheAgeMs: nowAge, backgroundRefresh: false };
+  }
+
+  /** 同一 session 只允许一个 inflight；重复请求复用，避免把慢查询叠成雪崩。 */
+          ensureDescendantInflight(rootSessionId        , subagents     )                                          {
+    const existing = this.descendantTreeInflight.get(rootSessionId);
+    if (existing) return existing;
+    const inflight = (async () => {
+      const rows = (await subagents.listDescendants(rootSessionId)) ?? [];
+      const items = (Array.isArray(rows) ? rows : []).map((row     ) => ({
+        sessionId: scalar(row?.id),
+        parentSessionId: scalar(row?.parentId),
+        depth: Number(row?.depth ?? 0) || 0,
+        mode: scalar(row?.mode),
+        label: scalar(row?.label),
+        activity: scalar(row?.activity),
+      }));
+      this.descendantTreeCache.set(rootSessionId, { at: Date.now(), items });
+      return items;
+    })().finally(() => this.descendantTreeInflight.delete(rootSessionId));
+    this.descendantTreeInflight.set(rootSessionId, inflight);
+    return inflight;
+  }
+
+  /** 后台刷新：不 await、不抛错（失败保留旧缓存，下次再说）。 */
+          refreshDescendantTree(rootSessionId        , subagents     )       {
+    if (this.descendantTreeInflight.has(rootSessionId)) return;
+    void this.ensureDescendantInflight(rootSessionId, subagents).catch(() => {
+      /* 后台失败不影响面板 */
+    });
+  }
+
+  /**
+   * 子智能体树（**活动优先**）。
+   *
+   * 为什么不用 `buildAgentRoster`：那只覆盖**本插件 spawn 的实例**（`role-xxx-nn`）。
+   * 用户面板上那 186 个子会话大多是宿主 `subagents` 直接拉起来的（手动 spawn、
+   * 别的插件、旧轮次），花名册里根本没有它们。要回答「这么多子智能体里现在谁在干活」，
+   * 数据源只能是 `subagents.listDescendants(rootSessionId)`。
+   *
+   * 排序是**需求本身**，不是装饰：186 条平铺时，找"正在跑的那几个"要肉眼扫。
+   * 所以顺序固定为 running → idle/其余 → 深度 → 名字，并且在返回里给出分组计数，
+   * 让面板可以先只渲染 running，其余折叠。
+   */
+  async listSubagentTree(rootSessionId        , options                                    = {}) {
+    const sessionId = String(rootSessionId ?? '').trim();
+    if (!sessionId) return { ok: false, error: 'sessionId-required' };
+    let loaded                                                             ;
+    try {
+      loaded = await this.loadDescendantTree(sessionId, Number(options.limit) === 0 ? 12000 : 9000);
+    } catch (error) {
+      const message = String((error         )?.message ?? error);
+      if (message === 'subagents-unavailable') {
+        return { ok: false, error: 'subagents-unavailable', hint: '宿主未挂 subagents，或版本没有 listDescendants' };
+      }
+      return { ok: false, error: 'descendants-failed', detail: errorInfo(error) };
+    }
+    const items = loaded.items;
+                                                                                             
+    const asItem = (row                         )           => ({
+      activity: row.activity,
+      depth: Number(row.depth ?? 0) || 0,
+      label: row.label,
+      sessionId: row.sessionId,
+    });
+    const isRunning = (item          ) => String(item.activity ?? '') === 'running';
+    const sort = String(options.sort ?? 'active');
+    const ordered             = items.map(asItem);
+    if (sort === 'active') {
+      // 三条稳定键：在干活的最前 → 深度浅的在前（靠近根）→ 名字
+      ordered.sort((a, b) => {
+        const ra = isRunning(a) ? 0 : 1;
+        const rb = isRunning(b) ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        if (a.depth !== b.depth) return a.depth - b.depth;
+        return String(a.label ?? a.sessionId ?? '').localeCompare(String(b.label ?? b.sessionId ?? ''));
+      });
+    }
+    const running = items.filter(isRunning).length;
+    const limit = Number(options.limit ?? 0);
+    const shown = limit > 0 ? ordered.slice(0, limit) : ordered;
+    /**
+     * `stale=true` 表示这次读的是缓存（宿主 `listDescendants` 还没回来 / 刚超过 TTL）。
+     * 必须透出：面板要能区分"现在真的没人在跑"和"还没读到最新的"。
+     */
+    const cacheAgeMs = loaded.cacheAgeMs;
+    return {
+      ok: true,
+      sessionId,
+      sort,
+      total: items.length,
+      running,
+      idle: items.length - running,
+      shown: shown.length,
+      truncated: shown.length < ordered.length,
+      stale: loaded.timedOut === true || loaded.backgroundRefresh === true,
+      timedOut: loaded.timedOut === true,
+      cacheAgeMs,
+      /** 面板可以直接用它决定"还需不需要往下拉" */
+      groups: [
+        { key: 'running', label: '在干活', count: running },
+        { key: 'idle', label: '没在干活', count: items.length - running },
+      ],
+      items: shown,
+      generatedAt: new Date().toISOString(),
+      hint:
+        loaded.timedOut === true
+          ? '宿主 listDescendants 尚未返回（实测 200 个子会话时约 15s）；这里是上一次的结果，稍后自动刷新'
+          : null,
+    };
+  }
+
+  /**
+   * 写宿主 per-session 的 Team 模式（`agentTeams.setEnabled`）。
+   *
+   * 为什么需要：输入框那个「启用智能体团队协作」开关是宿主自己的；
+   * 插件若也开一份自己的协作开关，用户就要在两处各点一次，而且状态会不一致。
+   * 这里让插件的开关**驱动宿主那一个**，从而「一个开关，两边一致」。
+   */
+  async setTeamMode(input                                         , caller      ) {
+    const sessionId = String(input?.sessionId ?? '').trim();
+    if (!sessionId) return { ok: false, error: 'sessionId-required' };
+    const teams = this.agentTeams;
+    if (!teams) return { ok: false, error: 'agentTeams-unavailable' };
+    if (typeof teams.setEnabled !== 'function') {
+      return {
+        ok: false,
+        error: 'team-mode-unsupported',
+        hint: '宿主 agentTeams 没有 setEnabled（契约变更）；只能改插件自己的 coordination 轴',
+      };
+    }
+    /**
+     * `setEnabled` 要**真 Agent**（它把选择写进 root session 的日志，假对象写不进去）。
+     * 所以：caller 本身就是目标 session 时直接用；否则经 sessionController 解析出活 Agent。
+     */
+    let agent      = null;
+    if (caller?.id && String(caller.id) === sessionId) {
+      agent = caller;
+    } else {
+      try {
+        const sessions = this.ctx.get?.('sessionController')       ;
+        const resolved = await sessions?.resolveAgent?.(sessionId);
+        agent = resolved?.agent ?? null;
+      } catch {
+        agent = null;
+      }
+    }
+    if (!agent) {
+      return {
+        ok: false,
+        error: 'agent-unavailable',
+        hint: 'setEnabled 需要目标会话的活 Agent；面板请用当前会话的 caller（先从 sessionController 解析）',
+      };
+    }
+    try {
+      await teams.setEnabled(agent, input.enabled === true);
+    } catch (error) {
+      return { ok: false, error: 'team-mode-failed', detail: errorInfo(error) };
+    }
+    let now                 = null;
+    try {
+      now = typeof teams.isEnabled === 'function' ? teams.isEnabled(agent) === true : null;
+    } catch {
+      now = null;
+    }
+    this.appendJournal('team_mode_changed', { sessionId, enabled: input.enabled === true, observed: now, by: caller?.id ?? null });
+    return { ok: true, sessionId, enabled: input.enabled === true, observed: now };
   }
 
   /**
@@ -3802,6 +4228,8 @@ export class L0ControlService {
                         
                        
                                
+                                            
+                                                     
                       
                        
     {
@@ -3813,6 +4241,26 @@ export class L0ControlService {
     const sessionController = probe('sessionController');
     const missing           = [];
     const degraded           = [];
+    /** 服务在 ≠ 能干同样的事：这里再探一次方法级能力，缺了就明说降级在哪儿。 */
+    let teamCapabilities                                 = null;
+    if (agentTeams) {
+      teamCapabilities = teamCapabilitiesOf(this.ctx.get('agentTeams'));
+      if (!teamCapabilities.spawnTeammate) {
+        degraded.push(
+          '宿主 agentTeams 没有 spawnTeammate（nightly 契约变更）：agent_spawn 只能走 activation，' +
+          '实例不能作 TeamTask owner。这是宿主侧能力缺口，不是插件配置问题。',
+        );
+      }
+      if (!teamCapabilities.membership || !teamCapabilities.listMembers) {
+        degraded.push(
+          '宿主 agentTeams 没有 membership / listMembers：team_status 的成员名单会退化为空，' +
+          '并用 capabilities.*=false 标出「读不到」而不是「没有成员」。',
+        );
+      }
+      if (!teamCapabilities.teamMode) {
+        degraded.push('宿主 agentTeams 没有 isEnabled/setEnabled：无法读/写 per-session 的 Team 模式（输入框那个开关）。');
+      }
+    }
     if (!agentTeams) {
       missing.push('agentTeams');
       degraded.push(
@@ -3828,7 +4276,7 @@ export class L0ControlService {
       missing.push('sessionController');
       degraded.push('无法观测/接管既有会话，续跑与消息转发不可用。');
     }
-    return { agentTeams, subagents, sessionController, missing, degraded };
+    return { agentTeams, subagents, sessionController, teamCapabilities, missing, degraded };
   }
 
           hostServicesReported = false;
